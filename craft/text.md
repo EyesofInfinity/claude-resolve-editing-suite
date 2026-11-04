@@ -26,6 +26,8 @@ Break lines at natural phrases, keeping an article with its noun. Keep the top l
 
 ## Short-form word-by-word captions
 
+Resolve Studio makes these itself: see "Captions" in `.claude/skills/make-video/SKILL.md`. Its automatic split follows characters per line, so read the groups and fix any that break a phrase badly.
+
 - One to five words at a time, breaking at speech phrases. Aim for two to four.
 - Sync wins. When speech runs faster than the limit below, merge up to five words, stay in sync, and list those moments for the user.
 - Spoken fillers such as "um" come out of captions unless the user asks for every sound. List what you removed.
@@ -67,7 +69,7 @@ Name and one short role. On screen 3 to 5 seconds, first appearance only. Same p
 
 ## Captions as a file
 
-For long YouTube videos, upload a corrected caption file as well as or in place of burned-in text. People can switch it off, and search can read it. Correct names and terms by hand. Speech models get these wrong.
+For long YouTube videos, upload a corrected caption file as well as or in place of burned-in text. People can switch it off, and search can read it. Resolve renders one with `"SubtitleFormat": "SeparateFile"`. Correct names and terms by hand. Speech models get these wrong.
 
 ## Motion
 

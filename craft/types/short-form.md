@@ -45,7 +45,7 @@ Results on one platform do not predict another. YouTube Shorts leans on completi
 
 ## Suite route
 
-A finished clip that only wants captions: "Captions on a finished clip" in `.claude/skills/make-video/SKILL.md`. Cutting: `edit/README.md`, then `edit/to_resolve.py`, which sets the timeline to the clip's own size. Animated: `builder/skills/motion-brief-writer/SKILL.md`, `builder/skills/reel-export/SKILL.md` or `animation/animate/SKILL.md`. Text rules: [text.md](../text.md).
+Captions: "Captions" in `.claude/skills/make-video/SKILL.md`, using Resolve's own. Cutting: `edit/README.md`, then `edit/to_resolve.py`, which sets the timeline to the clip's own size. Animated: `builder/skills/motion-brief-writer/SKILL.md`, `builder/skills/reel-export/SKILL.md` or `animation/animate/SKILL.md`. Text rules: [text.md](../text.md).
 
 ## Common failures
 

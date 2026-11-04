@@ -137,15 +137,20 @@ Use this for weddings, events, documentaries, vlogs, music videos and anything a
 7. **Sync.** No tool syncs cameras or a separate recorder. Line them up in the script from waveforms or matching transcripts, or ask the user to sync in Resolve.
 8. **Finish.** Route C for the grade. Mix in Resolve, keeping the real sound. Then review.
 
-## 6. Captions on a finished clip
+## 6. Captions
 
-No tool burns captions on real footage yet.
+Resolve Studio makes captions itself. Use it first. Rules for groups, size and timing are in `craft/text.md`.
 
-1. Check the model first: `edit/transcribe.py` downloads about 1.5 GB on its first run, so tell the user. Ask the language. `medium.en` is English only.
-2. Run `edit/transcribe.py` for word timings.
-3. Write a job script that groups the words by the rules in `craft/text.md` into an ASS file. Leave out "um" and "uh" unless asked, and list what you dropped. Have the user spell names.
-4. Check that FFmpeg has the `subtitles` filter (`ffmpeg -filters`). Burn a still first, then the whole clip, to a new file.
-5. Look at frames at phone size. Phone clips in HDR can wash out when re-encoded: read the colour transfer first.
+1. Read the open project and timeline, as `CLAUDE.md` rule 1 says. Put the clip on a new timeline, and set its size to 1080 by 1920 for 9:16.
+2. Create the captions with `timeline.CreateSubtitlesFromAudio`. Pass `resolve.SUBTITLE_LANGUAGE`, `SUBTITLE_CAPTION_PRESET`, `SUBTITLE_CHARS_PER_LINE`, `SUBTITLE_LINE_BREAK` and `SUBTITLE_GAP`. For 9:16, use 16 characters a line on one line: at the default size, 20 characters reach the edges of the frame. It returns at once, so poll `project.GetCreateSubtitlesFromAudioStatus()` until `JobStatus` reads `Complete`. On 40 seconds of speech it took under a minute.
+3. Read the text back with `timeline.GetItemListInTrack("subtitle", 1)`; each item's name is its text. Check names and terms. Have the user spell names, and correct them in Resolve's subtitle inspector, which has search and replace.
+4. **The user does two things by hand, because scripts cannot.** Tell them exactly what and why:
+   - **Position:** on 9:16 Resolve's default sits at about y 1540, under the platform's buttons. Raise it above y 1400 in the subtitle track's style in the Inspector.
+   - **An animated style, if wanted:** Resolve has styles such as Word Highlight in the titles list. Drag one onto the subtitle track. Scripts can only insert them on a video track, as an empty title that pushes the clip along, so never do that.
+5. Render with `SetRenderSettings({"ExportSubtitle": True, "SubtitleFormat": "BurnIn", ...})`. Use `"SeparateFile"` for a caption file on long YouTube videos. Delete only your own render job afterwards.
+6. Look at frames at phone size.
+
+**Without Resolve Studio,** which is the edition that generates captions: run `edit/transcribe.py` for word timings. It downloads about 1.5 GB on first run, and `medium.en` is English only. Write a job script that groups the words into an ASS file, check that FFmpeg has the `subtitles` filter (`ffmpeg -filters`), burn a still first, then the whole clip, to a new file. Phone clips in HDR can wash out when re-encoded: read the colour transfer first.
 
 ## 7. Review
 

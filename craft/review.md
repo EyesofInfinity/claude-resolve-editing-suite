@@ -73,7 +73,7 @@ The cut times are the `pts_time` values in the output. Read the shot lengths for
 
 `motion_qa.py` reads real footage too. A camera flash is a real one-frame flash, and a dark dance floor can read as blank. Look at the frame, then report it as real. Each caption change can list as a pop.
 
-Check what exists. A grade-only job has no render, so review its stills. Spell-check and text contrast have no tool: read the frames.
+Check what exists. A grade-only job has no render, so review its stills. Spell-check and text contrast have no tool: read the frames, and read Resolve's subtitle text back by script.
 
 **A fact check fails the delivery.** Wrong words or figures, unlicensed assets, a frozen or broken render, peaks clipping, an unreadable caption, a flash over the limit. Fix them.
 
