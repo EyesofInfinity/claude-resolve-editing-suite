@@ -14,7 +14,7 @@ Voice first, then sound effects, then music. If speech is hard to hear at any mo
 Work in this order. Stop as soon as it sounds natural. Every repair costs something.
 
 1. **Edits.** Remove bad takes. Short fades on every edit, about 10 ms. Room tone in gaps.
-2. **Noise.** Reduce only what distracts. Heavy noise reduction sounds watery. Resolve Studio's Voice Isolation helps when noise masks words; set it by need, since full strength can sound processed. Its settings are on the clip in the Inspector.
+2. **Noise.** Reduce only what distracts. Heavy noise reduction sounds watery. Resolve Studio's Voice Isolation helps when noise masks words; set it by need, since full strength can sound processed. See [resolve-tools.md](resolve-tools.md) for this and the Dialogue Leveler.
 3. **Mouth noise and plosives.** Treat single clicks and pops.
 4. **Level.** Match clip gain first, then let Resolve's Dialogue Leveler or gentle automation ride the rest.
 5. **EQ.** Cut before boosting. High-pass at 80 to 100 Hz. Look for mud around 200 to 500 Hz and harshness at 2 to 5 kHz. [practice]

@@ -48,7 +48,7 @@ Speaker names at the start. Topic chapter cards are optional. A clean caption fi
 
 ## Suite route
 
-`edit/transcribe.py --track n` per speaker and `edit/README.md` for one recording. Several cameras follow Route D in `.claude/skills/make-video/SKILL.md`, since no tool syncs or switches them. `looks/README.md` per camera.
+`edit/transcribe.py --track n` per speaker and `edit/README.md` for one recording. For several cameras, Resolve makes a multicam clip: see [resolve-tools.md](../resolve-tools.md). Route D in `.claude/skills/make-video/SKILL.md` covers the rest. `looks/README.md` per camera.
 
 ## Common failures
 

@@ -50,6 +50,7 @@ interview craft from [interview](types/interview.md).
 | Captions, titles, on-screen words | [text.md](text.md) |
 | Animation and motion graphics | [motion.md](motion.md) |
 | Checking the work | [review.md](review.md) |
+| Jobs DaVinci Resolve already does: sync, reframing, captions, voice cleanup | [resolve-tools.md](resolve-tools.md) |
 
 ## When the user is new to this
 

@@ -20,7 +20,7 @@ sharp shot of nothing.
 - Lines, doorways and light can lead the eye to the subject.
 - Plain or darker backgrounds separate the subject. Clear anything growing out of a head.
 - Plan empty space where text or a graphic will go.
-- A portrait crop that works for a phone is a new composition. Reframe each shot for 9:16 by hand or by rule. Centre-cropping a wide film loses the subject.
+- A portrait crop that works for a phone is a new composition. Reframe each shot for 9:16. Resolve's Smart Reframe follows the subject: check its result on the frames. Centre-cropping a wide film loses the subject.
 
 ## Shot sizes
 
@@ -39,7 +39,7 @@ sharp shot of nothing.
 - A push toward a subject raises attention. A pull away ends a moment or reveals context.
 - Vary moves across a film. The same slow zoom on every shot is the most common sign of an automated edit.
 - A still frame can be the strongest choice, especially after a run of movement.
-- Stabilise only what needs it. Heavy stabilisation warps faces and crops the frame. A little human handheld feels true in a vlog or documentary.
+- Stabilise only what needs it, with Resolve's Stabilizer. Heavy stabilisation warps faces and crops the frame. A little human handheld feels true in a vlog or documentary.
 
 ## Moving a still photograph
 

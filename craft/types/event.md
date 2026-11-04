@@ -28,7 +28,7 @@ Time order is usually wrong for a highlight. Build for feeling.
 - Faces and reactions beat wide shots and decor.
 - For conferences, use short real quotes, crowd reactions and the sense of scale. One clear reason a viewer would want to attend next year.
 - For concerts, cut to the song's sections and follow the performer's energy. Hold on good moments rather than cutting for its own sake. Use the real sound.
-- Sync several cameras before the first decision. No tool does this yet: see Route D in `.claude/skills/make-video/SKILL.md`.
+- Sync several cameras before the first decision, with Resolve's own tools: see [resolve-tools.md](../resolve-tools.md).
 
 ## Picture and colour
 
@@ -51,7 +51,7 @@ Names, date and place, simply. Speaker names at conferences. Keep brand use agre
 
 ## Suite route
 
-Route D in `.claude/skills/make-video/SKILL.md`. `edit/transcribe.py` finds spoken lines, `effects/beat/beat.py` writes a beat grid for you to cut to, and `looks/README.md` covers grade groups with `--clips`. Most of the assembly is a job script, so tell the user the first cut may need more corrections.
+Route D in `.claude/skills/make-video/SKILL.md`. `edit/transcribe.py` finds spoken lines, `effects/beat/beat.py` writes a beat grid for you to cut to, and `looks/README.md` covers grade groups with `--clips`. Resolve syncs and lays out the clips, and you choose the shots.
 
 ## Common failures
 

@@ -31,6 +31,7 @@ else in one line at the end. The table says what to run when a job includes that
 | Any sound work | `craft/sound.md`. For a film with no recorded sound of its own, `animation/sound-pass/SKILL.md` |
 | Any words on screen, and captions on all 9:16 work | `craft/text.md` |
 | Any designed frame, title card, chart, interface or web page, before you show it | `.claude/skills/unslop/SKILL.md`, and `craft/motion.md` |
+| Before you write a script, or say something cannot be done | `craft/resolve-tools.md` |
 | Every render, before you call it finished | `craft/review.md` and `animation/motion-qa/motion_qa.py` |
 
 **`sound_pass.py` replaces a film's audio.** Its mix holds only the music and effects, so a voice, vows or room sound would be lost. Never run it on a film
@@ -68,8 +69,8 @@ Then make the job's folder, `projects/<job name>/`. Run `python -I tools/doctor.
 Read `craft/README.md` and the file for this type. Write `projects/<job name>/brief.md` before any cut or render, with your decisions in it. A draft with open
 lines is fine. Then pick one route below. A job that is one small thing, such as captions on a finished clip, takes only the steps it needs.
 
-**When a step has no tool.** Some good rules have no ready-made tool behind them. Write a small script in the job folder, test it on a short piece first, and tell the user this step is
-custom and may need more of their corrections.
+**When a step seems to have no tool.** Follow "The show must go on" in `CLAUDE.md`: search this folder, `craft/resolve-tools.md` and Resolve's docs, then search the web, then build one. Never stop at "can't". Tell the user when a step is
+custom, because it may need more of their corrections.
 
 ## 2. Route A: an animated video
 
@@ -126,15 +127,15 @@ Place light effects with a low Amount: they must belong to the scene, not sit on
 
 ## 5. Route D: many clips, led by picture or music
 
-Use this for weddings, events, documentaries, vlogs, music videos and anything assembled from many clips. Most of these steps have no ready-made tool yet: say so to the user up front.
+Use this for weddings, events, documentaries, vlogs, music videos and anything assembled from many clips. Resolve's own tools are in `craft/resolve-tools.md`. Choosing the shots and the pace is your job.
 
 1. **Inventory.** List the folder. Run `ffprobe` on each clip for length, frame rate, size, audio and colour transfer. Note variable-rate phone clips and log footage. Write it to the job folder.
 2. **Read it.** Make a contact sheet per clip, at a rate set from its length (`craft/review.md`), and write one line on each.
 3. **Find the words.** Run `edit/transcribe.py` on clips with speech, one clip at a time. It stops on a clip with no audio track. Use `--model medium` for speech that is not English.
 4. **Find the music.** `effects/beat/beat.py` writes the song's beats and downbeats to a `.music.json`, once the shot tools are installed. You place the cuts: nothing here does it for you.
 5. **Plan.** Write a shot plan in the job folder: clip, in, out, why. Show the user before any long job.
-6. **Build.** `edit/to_resolve.py` lays out one source only. For many clips, write a job script that uses Resolve's `AppendToTimeline` on a new timeline. Test it on a few clips first.
-7. **Sync.** No tool syncs cameras or a separate recorder. Line them up in the script from waveforms or matching transcripts, or ask the user to sync in Resolve.
+6. **Build.** `edit/to_resolve.py` lays out one source only. For many clips, use Resolve's `CreateTimelineFromClips` or `AppendToTimeline` on a new timeline. Test it on a few clips first.
+7. **Sync.** Use Resolve's `AutoSyncAudio` for a separate recorder and `CreateMulticamClip` for several cameras.
 8. **Finish.** Route C for the grade. Mix in Resolve, keeping the real sound. Then review.
 
 ## 6. Captions

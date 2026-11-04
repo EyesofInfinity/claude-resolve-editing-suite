@@ -49,7 +49,7 @@ Real sound first. Ambience under everything. A location's sound starts before it
 
 ## Suite route
 
-Route D in `.claude/skills/make-video/SKILL.md`. `edit/transcribe.py` on all speech, `looks/README.md` to grade. Assembly from many clips is a job script.
+Route D in `.claude/skills/make-video/SKILL.md`. `edit/transcribe.py` on all speech, `looks/README.md` to grade. Resolve's own tools are in [resolve-tools.md](../resolve-tools.md).
 
 ## Common failures
 

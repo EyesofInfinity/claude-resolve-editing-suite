@@ -34,6 +34,18 @@ it, run the tool without `-I`.
 | Advice on making a video better: pacing, structure, framing, grade, sound | the craft rules | `craft/README.md` |
 | A screen, graphic, chart or web page that looks AI-made or cheap | unslop | `.claude/skills/unslop/SKILL.md` |
 
+## The show must go on
+
+Never tell the user that no tool exists, or that a job cannot be done, from an assumption. Before you even think it, search:
+
+1. **Search first.** This folder, `craft/resolve-tools.md`, Resolve's own scripting docs and what is already installed.
+2. **Go and find one.** If nothing here does it, search the web for a tool that does. Prefer free and open source, read its licence, and check that it is safe.
+   Rule 8 still applies: ask before you install or download.
+3. **Build one.** If nothing exists, write a small script in the job folder and test it on a short piece.
+4. **Keep going.** If one step truly needs a person, name that one step, and do everything around it.
+
+Say what you searched and what you found. A job ends in a result, or in a clear next step the user can take. It never ends in "can't".
+
 ## Rules
 
 These protect the user's work. Never skip them.
