@@ -33,6 +33,9 @@ model releases for the medium term.
 
 ## What is in it
 
+- **Craft.** Rules for what makes each type of video good, from talking heads to ads and documentaries: structure, pacing, framing, grade, sound and
+  text. Claude reads them and runs the right tools on its own, so you can ask in plain words and do not need to be an editor. See
+  [craft/README.md](craft/README.md).
 - **Cutting.** Silences, stutters, false starts and retakes found from the transcript. The cut lands on a new Resolve timeline.
 - **Animation.** Promos, explainers, charts, titles and illustrated stories, made in code at 60 fps with motion blur.
 - **Grading.** A photo-style grade and film looks, judged shot by shot, with a way back.

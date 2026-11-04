@@ -5,6 +5,8 @@ description: Add a measured sound pass to a motion-graphics video made with Clau
 
 # Sound effects
 
+**This script replaces the film's audio.** `scripts/sound_pass.py` mixes music and effects only, then writes that mix as the film's sound. Use it on a silent picture. On a film with a voice or real sound, use this skill's licence and beat-grid steps, and mix in Resolve.
+
 Claude can't hear. So this skill never judges sound by feel: it measures every step, and it hands the user 5 timestamps to check with headphones. It never says "it sounds good".
 
 The approach is Vox's sound-pass prompt (@Voxyz_ai, https://x.com/Voxyz_ai/status/2109358372873183564, 11 Oct 2026). Keep that credit.
@@ -32,7 +34,6 @@ Everything else in the manifest is an alternative (`alt_categories` lists which 
 - **Licences:** only CC0 and Mixkit Free License count as free and safe; the script checks every sound it places. Don't list licences sound by sound. If all are known, tell the user once: the sounds are listed as CC0 or Mixkit Free License by their sources, sources can change their terms so check the source page now and then. If the script reports an unknown licence, name that exact sound, its licence and its source link, and tell the user not to publish until it is checked or swapped. Never describe an unknown licence as probably fine.
 - **Music licence:** ask where the track came from and pass `--music-source "track, artist, link"` and `--music-license "..."`. Without them the run marks the music LICENCE NOT CONFIRMED; say so plainly.
 - **Credits:** every run writes `CREDITS.txt`, a paste-ready list of the sounds actually used and the music. Recommend it once: optional, for a YouTube, Instagram or TikTok description; CC0 needs no credit, but the list is proof of source if a platform flags the audio.
-- Measure the **exported MP4**, never the intermediate WAV.
 - Measure the **exported MP4**, never the intermediate WAV.
 
 ## 0. Licence check (during the edit, before you export)
