@@ -1,0 +1,63 @@
+// Develop Screen: retro screens and damaged pictures in one transform DCTL, each built from the real thing:
+//   0 JPEG Damage: baseline JPEG at a low quality: 8 x 8 DCT blocks quantised by the standard tables (block edges,
+//     ringing round edges, detail gone in flat blocks), colour at half resolution; bit errors shift and recolour the
+//     MCUs to the next restart marker and fill the first with basis-pattern noise.
+//   1 Digital Damage: a video stream after lost packets: macroblocks lost from a point on and concealed by smearing
+//     down the last good row, by a wrong motion vector, or with no colour (green); it spreads until the next keyframe.
+//   2 TV Damage: an analog set on a failing signal: snow, a ghost, sinking contrast, colour drifting and dropping out,
+//     the vertical hold rolling through the blanking bar, the horizontal hold tearing the lines, hum bars.
+//   3 Night Vision: an image intensifier tube: gain, a green phosphor, scintillating noise, halos round bright
+//     sources, the fibre honeycomb and blemishes, a round eyepiece (one or two).
+//   4 X-Ray: the picture as a radiograph's density, inverted, edge-enhanced, on a blue base, with quantum mottle.
+//   5 LED Sign: a grid of round emitters with black gaps and a glow, few brightness levels dithered across the
+//     emitters, scan bands rolling; full colour, red-green-blue lamp clusters or amber.
+//   6 Misalignment: a three-gun set out of convergence, out of focus by gun, with purity patches.
+//   7 Video Glitch: a digital link failing: sparkles, repeated lines, slipping bands, wrong colour space, field tear.
+// Moves by TIMELINE_FRAME_INDEX: run it as an OpenFX DCTL effect or a DCTL plugin node. Gritty and dithered
+// (the Bayer dither finish on every mode but the LED sign, which dithers its own emitters). Amount mixes with the
+// picture in display terms; Amount 0 is the input exactly. MIT License.
+
+DEFINE_UI_PARAMS(scAmount,   Screen,   DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(scMode,     Mode,     DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 7.0, 1.0)
+DEFINE_UI_PARAMS(scStrength, Strength, DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(scSize,     Size,     DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(scRate,     Rate,     DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(scColour,   Colour,   DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(scShape,    Shape,    DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 2.0, 1.0)
+DEFINE_UI_PARAMS(scDither,   Dither,   DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(scSeed,     Seed,     DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Mode, "0 JPEG Damage, 1 Digital Damage, 2 TV Damage, 3 Night Vision, 4 X-Ray, 5 LED Sign, 6 Misalignment, 7 Video Glitch")
+DEFINE_UI_TOOLTIP(Strength, "How bad: JPEG quality, damage spread, signal loss, tube gain, film contrast, LED glow, convergence error, link errors")
+DEFINE_UI_TOOLTIP(Size, "JPEG sample size, macroblock size, ghost delay, halo size, X-ray edge radius, LED pitch, beam focus, glitch band height")
+DEFINE_UI_TOOLTIP(Rate, "How often: bit errors, packet loss, hold slips, scintillation, mottle speed, LED scan bands, beam wobble, link drops")
+DEFINE_UI_TOOLTIP(Colour, "JPEG colour crush, green blocks, hue drift, phosphor (over 50 toward white), X-ray blue, LED saturation, purity, colour-space bands")
+DEFINE_UI_TOOLTIP(Shape, "Night Vision: 0 full frame, 1 one eyepiece, 2 two; X-Ray: 0 negative, 1 bright as dense; LED Sign: 0 full colour, 1 RGB lamp clusters, 2 amber")
+DEFINE_UI_TOOLTIP(Dither, "The picture crushed to few levels through a Bayer dither; LED Sign: brightness levels dithered across the emitters")
+
+#include "screen.h"
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (scAmount <= 0.0f) return c0;
+    int m = (int)(scMode + 0.5f), f = TIMELINE_FRAME_INDEX;
+    float sc = (float)(H) / 1080.0f, amt = scAmount / 100.0f;
+    float str = scStrength / 100.0f, size = scSize / 100.0f, rate = scRate / 100.0f, col = scColour / 100.0f;
+    float dith = scDither / 100.0f;
+    uint sd = (uint)(scSeed) * 977u + 7u;
+    float3 o = c0;
+    float grit = 0.3f;
+    if (m == 0) { o = scJpeg(p_TexR, p_TexG, p_TexB, x, y, W, H, sc, str, size, rate, col, f, sd); grit = 0.15f; }
+    else if (m == 1) { o = scDigital(p_TexR, p_TexG, p_TexB, x, y, W, H, sc, str, size, rate, col, f, sd); grit = 0.25f; }
+    else if (m == 2) { o = scTV(p_TexR, p_TexG, p_TexB, x, y, W, H, sc, str, size, rate, col, f, sd); grit = 0.45f; }
+    else if (m == 3) { o = scNight(p_TexR, p_TexG, p_TexB, x, y, W, H, sc, str, size, rate, _saturatef(2.0f * col - 1.0f), scShape, f, sd); grit = 0.4f; }
+    else if (m == 4) { o = scXray(p_TexR, p_TexG, p_TexB, x, y, W, H, sc, str, size, rate, col, scShape, f, sd); grit = 0.3f; }
+    else if (m == 5) { o = scLed(p_TexR, p_TexG, p_TexB, x, y, W, H, sc, str, size, rate, col, dith, scShape, f, sd); }
+    else if (m == 6) { o = scMisalign(p_TexR, p_TexG, p_TexB, x, y, W, H, sc, str, size, rate, col, f, sd); grit = 0.35f; }
+    else { o = scVGlitch(p_TexR, p_TexG, p_TexB, x, y, W, H, sc, str, size, rate, col, f, sd); grit = 0.4f; }
+    o = make_float3(lerp1(c0.x, o.x, amt), lerp1(c0.y, o.y, amt), lerp1(c0.z, o.z, amt));
+    if (m == 5) return make_float3(_saturatef(o.x), _saturatef(o.y), _saturatef(o.z));
+    return gritFinish(o, x, y, H, amt, grit, dith, (uint)(f) * 17u + sd);
+}

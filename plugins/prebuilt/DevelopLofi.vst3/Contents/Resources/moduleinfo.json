@@ -1,0 +1,44 @@
+{
+  "Name": "DevelopLofi",
+  "Version": "1.0.0",
+  "Factory Info": {
+    "Vendor": "Develop",
+    "URL": "",
+    "E-Mail": "",
+    "Flags": {
+      "Unicode": true,
+      "Classes Discardable": false,
+      "Component Non Discardable": false,
+    },
+  },
+  "Classes": [
+    {
+      "CID": "6FD3B2B8F0514F03B789A4DEF18394B9",
+      "Category": "Audio Module Class",
+      "Name": "Develop Lo-fi",
+      "Vendor": "Develop",
+      "Version": "1.0.0",
+      "SDKVersion": "VST 3.8.1",
+      "Sub Categories": [
+        "Fx",
+        "Distortion",
+      ],
+      "Class Flags": 1,
+      "Cardinality": 2147483647,
+      "Snapshots": [
+      ],
+    },
+    {
+      "CID": "0D530079AC7E4814B8EF259DA8427BE4",
+      "Category": "Component Controller Class",
+      "Name": "Develop Lo-fi Controller",
+      "Vendor": "Develop",
+      "Version": "1.0.0",
+      "SDKVersion": "VST 3.8.1",
+      "Class Flags": 0,
+      "Cardinality": 2147483647,
+      "Snapshots": [
+      ],
+    },
+  ],
+}

@@ -1,0 +1,55 @@
+// Develop CRT: the picture on an old tube, scanlines and the tube itself. The glass bows the picture (Curve) and darkens its corners; the beam draws scanlines that thin in the
+// shadows and swell in the light; an aperture grille splits each column into red, green and blue; the phosphor
+// glows a little past its edges; the brightness flickers per frame; the Bayer dither finishes it. Moves by
+// TIMELINE_FRAME_INDEX (the flicker): run it as an OpenFX DCTL effect or a DCTL plugin node. MIT License.
+
+DEFINE_UI_PARAMS(crAmount, CRT,             DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(crCurve,  Curve,           DCTLUI_SLIDER_FLOAT, 35.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(crLines,  Scanlines,       DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(crPitch,  Line Pitch,      DCTLUI_SLIDER_FLOAT, 4.0, 2.0, 12.0, 1.0)
+DEFINE_UI_PARAMS(crMask,   Grille,          DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(crGlow,   Phosphor Glow,   DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(crFlick,  Flicker,         DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(crDither, Dither,          DCTLUI_SLIDER_FLOAT, 45.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Line Pitch, "Pixels per scanline at 1080")
+DEFINE_UI_TOOLTIP(Curve, "How far the glass bows the picture; the corners outside the tube go black")
+
+#include "../light/light.h"
+#include "../glitch/glitch.h"
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (crAmount <= 0.0f) return c0;
+    float amt = crAmount / 100.0f, sc = (float)(H) / 1080.0f;
+    int f = TIMELINE_FRAME_INDEX;
+    float u = ((float)(x) + 0.5f - 0.5f * (float)(W)) / (float)(H), v = ((float)(y) + 0.5f - 0.5f * (float)(H)) / (float)(H);
+    float k = 0.18f * crCurve / 100.0f * amt;
+    float r2 = u * u + v * v;
+    float bu = u * (1.0f + k * r2), bv = v * (1.0f + k * r2);
+    float fx = bu * (float)(H) + 0.5f * (float)(W), fy = bv * (float)(H) + 0.5f * (float)(H);
+    int sx = (int)(fx), sy = (int)(fy);
+    float edge = sstep(0.0f, 6.0f * sc, fx) * sstep(0.0f, 6.0f * sc, (float)(W) - fx) * sstep(0.0f, 6.0f * sc, fy) * sstep(0.0f, 6.0f * sc, (float)(H) - fy);
+    float3 c = rgbAt(p_TexR, p_TexG, p_TexB, sx, sy, W, H);
+    int gd = (int)(2.0f * sc + 1.0f);
+    float3 g1 = rgbAt(p_TexR, p_TexG, p_TexB, sx - gd, sy, W, H), g2 = rgbAt(p_TexR, p_TexG, p_TexB, sx + gd, sy, W, H);
+    float3 g3 = rgbAt(p_TexR, p_TexG, p_TexB, sx, sy - gd, W, H), g4 = rgbAt(p_TexR, p_TexG, p_TexB, sx, sy + gd, W, H);
+    float gw = 0.12f * crGlow / 100.0f;
+    float r = c.x + gw * (g1.x + g2.x + g3.x + g4.x), g = c.y + gw * (g1.y + g2.y + g3.y + g4.y), b = c.z + gw * (g1.z + g2.z + g3.z + g4.z);
+    float L = luma(r, g, b);
+    float pitch = crPitch * sc;
+    float ph = 0.5f - 0.5f * _cosf(6.2831853f * fy / pitch);
+    float gap = crLines / 100.0f * (0.75f - 0.45f * _saturatef(L));
+    float line = 1.0f - gap * (1.0f - ph);
+    int col = (int)(fx / _fmaxf(1.0f, sc)) % 3;
+    float ms = 0.35f * crMask / 100.0f;
+    float mr = col == 0 ? 1.0f + ms : 1.0f - 0.5f * ms, mg = col == 1 ? 1.0f + ms : 1.0f - 0.5f * ms, mb = col == 2 ? 1.0f + ms : 1.0f - 0.5f * ms;
+    float fl = 1.0f + 0.05f * crFlick / 100.0f * (hash01((uint)(f) + 7u, 3u, 5u) - 0.5f);
+    float vig = 1.0f - 0.35f * crCurve / 100.0f * r2 * 2.2f;
+    float m = line * fl * vig * edge * 1.08f;
+    float3 o = make_float3(r * mr * m, g * mg * m, b * mb * m);
+    o = make_float3(lerp1(c0.x, o.x, amt), lerp1(c0.y, o.y, amt), lerp1(c0.z, o.z, amt));
+    return gritFinish(o, x, y, H, amt, 0.2f, crDither / 100.0f, (uint)(f) * 13u + 1u);
+}

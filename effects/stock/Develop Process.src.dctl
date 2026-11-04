@@ -1,0 +1,100 @@
+// Develop Process: the old colour processes and lab tricks as one effect. Each process is modelled from how the film worked, on linear light:
+//   0 Two Strip: a red record and a green record only. The red record sets the red; the green record (which also
+//     saw a little blue) sets both the green and, through the orange-red dye, the blue, a touch lower in the mids.
+//     No blue record, so a blue sky turns teal and a yellow turns pale; greens go blue-green, skin peach.
+//   1 Three Strip: three clean records printed by dye transfer: each channel's density pushed away from the mean
+//     density (the dyes' crosstalk removed, richer primaries) and a key density on all three (deep blacks). Greys
+//     stay grey.
+//   2 Infrared Colour: false-colour infrared film behind a yellow filter: infrared shows as red, red as green, green
+//     as blue. Infrared is read from the picture (living green reflects it strongly, sky and water weakly), so
+//     foliage turns red and magenta while the sky stays blue. Greys stay grey.
+//   3 Infrared Mono: black and white infrared: foliage glowing white, the sky deep, a white halation (the film has
+//     no anti-halation layer).
+//   4 Cross Slide: slide film developed as a negative: hard and saturated, yellow-green highlights, blue shadows.
+//   5 Cross Negative: negative film developed as a slide: flat, lifted, a peach cast where the orange mask stays.
+//   6 Bleach Bypass: the silver left in the print: a black and white image laid over the colour, half the colour,
+//     harder contrast.
+// Then the trims (Contrast, Saturation, Warmth, Fade), halation and grain that moves by TIMELINE_FRAME_INDEX: an
+// OpenFX DCTL effect on a clip or adjustment clip, or a DCTL plugin node. Amount mixes with the picture in display
+// terms; Amount 0 is the input exactly. MIT License.
+
+DEFINE_UI_PARAMS(pcAmount,  Process,     DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(pcKind,    Kind,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 6.0, 1.0)
+DEFINE_UI_PARAMS(pcCon,     Contrast,    DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(pcSat,     Saturation,  DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(pcWarm,    Warmth,      DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(pcFade,    Fade,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(pcHal,     Halation,    DCTLUI_SLIDER_FLOAT, 25.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(pcGrain,   Grain,       DCTLUI_SLIDER_FLOAT, 25.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(pcSeed,    Seed,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Kind, "0 Two Strip, 1 Three Strip, 2 Infrared Colour, 3 Infrared Mono, 4 Cross Slide, 5 Cross Negative, 6 Bleach Bypass")
+DEFINE_UI_TOOLTIP(Fade, "Blacks lifted and whites lowered toward an old print")
+
+#include "stock.h"
+
+__DEVICE__ float irOf(float3 c, float veg, float skyDrop)
+{
+    float L = luma(c.x, c.y, c.z);
+    float g = _fmaxf(c.y - 0.5f * (c.x + c.z), 0.0f), sky = _fmaxf(c.z - _fmaxf(c.x, c.y), 0.0f);
+    return _fmaxf(0.4f * L + 0.6f * c.x + veg * g - skyDrop * sky, 0.0f);
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (pcAmount <= 0.0f) return c0;
+    int k = (int)(pcKind + 0.5f);
+    float sc = (float)(H) / 1080.0f;
+    float3 l = lin3(c0);
+    float3 v = c0;
+    float halTint = 0.0f, halK = 1.0f;
+    if (k == 0) {
+        float rr = (l.x + 0.06f * l.y) / 1.06f, gr = (0.92f * l.y + 0.10f * l.z) / 1.02f;
+        float3 o = make_float3(rr, gr, _powf(_fmaxf(gr, 0.0f), 1.2f));
+        v = toneDisp(disp3(satLin(o, 1.1f)), 2.2f, 0.46f, make_float3(1.0f, 1.0f, 1.0f), make_float3(0.0f, 0.004f, 0.006f),
+                     make_float3(0.012f, 0.004f, -0.01f), 0.018f, 0.975f);
+    } else if (k == 1) {
+        float dr = -_log10f(_fmaxf(l.x, 0.0002f)), dg = -_log10f(_fmaxf(l.y, 0.0002f)), db = -_log10f(_fmaxf(l.z, 0.0002f));
+        float m = (dr + dg + db) / 3.0f, key = 0.18f * m;
+        float3 o = make_float3(_exp10f(-(dr + 0.65f * (dr - m) + key)), _exp10f(-(dg + 0.65f * (dg - m) + key)), _exp10f(-(db + 0.65f * (db - m) + key)));
+        v = toneDisp(disp3(o), 2.6f, 0.44f, make_float3(1.0f, 1.0f, 1.0f), make_float3(0.0f, 0.0f, 0.0f),
+                     make_float3(0.0f, 0.0f, 0.0f), 0.0f, 1.0f);
+    } else if (k == 2) {
+        float ir = irOf(l, 1.6f, 0.0f);
+        float3 o = satLin(make_float3(ir, l.x, l.y), 1.2f);
+        v = toneDisp(disp3(o), 2.4f, 0.46f, make_float3(1.0f, 1.0f, 1.0f), make_float3(0.0f, 0.0f, 0.0f),
+                     make_float3(0.0f, 0.0f, 0.0f), 0.0f, 1.0f);
+    } else if (k == 3) {
+        float ir = irOf(l, 2.4f, 0.9f);
+        float d = sCurve(toDisp(ir), 3.6f, 0.45f);
+        v = make_float3(d, d, d);
+        halTint = 1.0f; halK = 3.0f;
+    } else if (k == 4) {
+        float3 o = satLin(l, 1.3f);
+        float3 d = disp3(o);
+        v = make_float3(sCurve(d.x, 5.5f, 0.45f), sCurve(_powf(_saturatef(d.y), 0.9f), 4.0f, 0.45f), 0.10f + 0.70f * sCurve(d.z, -2.0f, 0.5f));
+    } else if (k == 5) {
+        float3 o = satLin(l, 0.8f);
+        v = toneDisp(disp3(o), -2.5f, 0.5f, make_float3(0.97f, 1.0f, 1.08f), make_float3(0.03f, 0.008f, -0.02f),
+                     make_float3(0.02f, 0.0f, -0.04f), 0.10f, 0.92f);
+    } else {
+        float3 d = disp3(satLin(l, 0.5f));
+        float s = sCurve(toDisp(luma(l.x, l.y, l.z)), 3.0f, 0.46f);
+        float3 ov = make_float3(d.x < 0.5f ? 2.0f * d.x * s : 1.0f - 2.0f * (1.0f - d.x) * (1.0f - s),
+                                d.y < 0.5f ? 2.0f * d.y * s : 1.0f - 2.0f * (1.0f - d.y) * (1.0f - s),
+                                d.z < 0.5f ? 2.0f * d.z * s : 1.0f - 2.0f * (1.0f - d.z) * (1.0f - s));
+        v = mix3(d, ov, 0.85f);
+    }
+    v = trims(sat3(v), pcCon, pcSat, pcWarm, pcFade);
+    float3 hl = halation(p_TexR, p_TexG, p_TexB, x, y, W, H, 14.0f * sc, pcHal / 100.0f * 0.6f * halK, halTint);
+    if (k == 3) { float hm = luma(hl.x, hl.y, hl.z); hl = make_float3(hm, hm, hm); }
+    float3 vl = lin3(v);
+    v = sat3(disp3(make_float3(vl.x + hl.x, vl.y + hl.y, vl.z + hl.z)));
+    uint fz = (uint)(TIMELINE_FRAME_INDEX) * 7919u + (uint)(pcSeed) * 131u + 17u;
+    v = grainDisp(v, x, y, H, pcGrain / 100.0f, 1.6f, fz);
+    if (k == 3) { float m = luma(v.x, v.y, v.z); v = make_float3(m, m, m); }
+    float a = pcAmount / 100.0f;
+    return sat3(mix3(c0, sat3(v), a));
+}

@@ -1,0 +1,145 @@
+// Develop Orton: Michael Orton's slide sandwich, the dream glow. Rec.709 display in and out. It sits
+// after the look node (and Night), so the dream picture is what blooms and prints; a look-only grade carries it.
+//
+// A bright copy of the picture (screened onto itself, Orton Saturation, raised by Orton Brightness in linear light)
+// is blurred and multiplied with its own sharp self (Sandwich, Orton Blend 0) or averaged with it (Blend 100); the
+// result mixes over the picture by Orton. Detail Keep adds back the finest detail (the pixel against its 3 x 3 mean).
+// Shadow Guard scales the glow and the detail together by smoothstep(0.03, 0.15, luma): at 100 a pixel with luma under
+// 0.03 comes back exactly as it was, so the blacks hold and their noise is left alone.
+//
+// The blur: a Gaussian (sigma = radius / 2.5) over a disc of Orton Size (percent of the frame height), the same taps
+// for every pixel and every frame. A disc of at most n pixels is read whole, each pixel at its Gaussian weight. A
+// larger one is read at n taps on a golden-angle spiral whose radius follows the Gaussian's own distribution, every
+// tap weighted 1/n, so the taps crowd where the weight is and no tap carries more than its share.
+//
+// n comes from the most one tap can move the display, a white pixel beside black: the tap moves the soft copy by
+// g1 / n, and the sandwich and the blend move a white pixel (its own copy is g1) by Orton (g1 (1 - Blend) + Blend / 2)
+// per unit of soft copy, so bound / n with bound = Orton g1 (g1 (1 - Blend) + Blend / 2), g1 = 2^(Brightness / 2.4),
+// Orton and Blend as fractions. The spiral puts up to about 16 taps more or fewer than their share on the bright side
+// of a hard edge (14.5 on a 30 px disc, 15.83 on a 20 px disc; measured at 512 to 3072 taps), so below the cap n = 2000
+// bound holds white beside black within about 16/2000 of display (2.0/255), and from bound 1.536, where n stops at
+// 3072, within about 16 bound/3072 (3.2/255 at Orton 100, Brightness 2, Blend 0; review measured 3.15 on a
+// 20 px white disc on black at 2160 lines). 2000 is the least of 1600, 1800
+// and 2000 that held the 30 px disc below within 1.5/255 at every setting tried. n runs 512 to 3072: 1429 at the
+// defaults, 512 up to bound 0.256 (Orton 16 at the default Brightness), 3072 from bound 1.536 (Orton 100 and
+// Brightness 2 at Blend 0 has bound 3.17).
+//
+// Against the dense blur on the CPU (Orton 10 to 100, Size 0.5 to 4, Brightness 0 to 2, Blend 0, 50 and 100, 1080
+// and 2160 lines): inside a 30 px disc at 0.95 on 0.15, wherever the output stays below 1, within 1.43/255. Around a
+// white speck on grey 0.3 (Orton 20, 45 and 100, 1080, 1920 and 2160 lines), outside the speck and its detail ring:
+// 1 x 1 within 0.16/255, 3 x 3 0.38, 5 x 5 0.33, 9 x 9 0.45; the ring and the speck's own pixels below 1 within 0.33.
+// These hold for neutral light: at Orton Saturation 200 a saturated primary's channel reaches 1.93 g1, so one tap can
+// move that channel up to 3.7 times as far.
+//
+// Raising a value by Orton Brightness in linear light (power 2.4) multiplies its display value by 2^(EV / 2.4), and
+// the copy is computed that way. With Orton at 0 the input comes back untouched. MIT License.
+
+DEFINE_UI_PARAMS(ortAmt,    Orton,            DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ortSize,   Orton Size,       DCTLUI_SLIDER_FLOAT, 2.0, 0.5, 4.0, 0.1)
+DEFINE_UI_PARAMS(ortEV,     Orton Brightness, DCTLUI_SLIDER_FLOAT, 0.8, 0.0, 2.0, 0.05)
+DEFINE_UI_PARAMS(ortSat,    Orton Saturation, DCTLUI_SLIDER_FLOAT, 125.0, 0.0, 200.0, 1.0)
+DEFINE_UI_PARAMS(ortMode,   Orton Blend,      DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ortDetail, Detail Keep,      DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ortGuard,  Shadow Guard,     DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Orton, "0 is off; how much of the dream glow the picture takes")
+DEFINE_UI_TOOLTIP(Orton Size, "Size of the glow, in percent of the frame height")
+DEFINE_UI_TOOLTIP(Orton Brightness, "Stops the glowing copy is raised before it is sandwiched")
+DEFINE_UI_TOOLTIP(Orton Saturation, "Saturation of the glowing copy, in percent (125 is a quarter richer)")
+DEFINE_UI_TOOLTIP(Orton Blend, "0 multiplies the sharp and soft copies (Orton's sandwich: richer, more contrast); 100 averages them (softer)")
+DEFINE_UI_TOOLTIP(Detail Keep, "Adds back the finest detail, so the glow stays crisp inside")
+DEFINE_UI_TOOLTIP(Shadow Guard, "Keeps the deepest shadows where they were, so the sandwich does not crush the blacks")
+
+__DEVICE__ float luma(float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; }
+__DEVICE__ float smooth01(float a, float b, float x)
+{
+    float t = _saturatef((x - a) / (b - a));
+    return t * t * (3.0f - 2.0f * t);
+}
+
+__DEVICE__ float3 glowCopy(float r, float g, float b, float sat, float g1)
+{
+    r = _saturatef(r); g = _saturatef(g); b = _saturatef(b);
+    r = r * (2.0f - r); g = g * (2.0f - g); b = b * (2.0f - b);
+    float y = luma(r, g, b);
+    r = _fmaxf(y + (r - y) * sat, 0.0f); g = _fmaxf(y + (g - y) * sat, 0.0f); b = _fmaxf(y + (b - y) * sat, 0.0f);
+    return make_float3(r * g1, g * g1, b * g1);
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float r = _tex2D(p_TexR, p_X, p_Y), g = _tex2D(p_TexG, p_X, p_Y), b = _tex2D(p_TexB, p_X, p_Y);
+    if (ortAmt <= 0.0f)
+    {
+        return make_float3(r, g, b);
+    }
+    float sat = ortSat / 100.0f, g1 = _exp2f(ortEV / 2.4f);
+    float k = ortAmt / 100.0f, m = ortMode / 100.0f;
+    float rad = ortSize / 100.0f * (float)(p_Height);
+    float sig = rad / 2.5f, c2 = 0.5f / (sig * sig);
+
+    float bound = k * g1 * (g1 * (1.0f - m) + 0.5f * m);
+    int n = (int)(bound * 2000.0f + 0.5f);
+    n = n < 512 ? 512 : (n > 3072 ? 3072 : n);
+
+    float br = 0.0f, bg = 0.0f, bb = 0.0f, bw = 0.0f;
+    if (3.14159265f * rad * rad <= (float)(n))
+    {
+        int R = (int)(rad);
+        for (int dy = -R; dy <= R; dy++)
+        {
+            int ex = (int)(_sqrtf(_fmaxf(rad * rad - (float)(dy * dy), 0.0f)));
+            for (int dx = -ex; dx <= ex; dx++)
+            {
+                int sx = p_X + dx, sy = p_Y + dy;
+                sx = sx < 0 ? 0 : (sx > p_Width - 1 ? p_Width - 1 : sx);
+                sy = sy < 0 ? 0 : (sy > p_Height - 1 ? p_Height - 1 : sy);
+                float w = _expf(-(float)(dx * dx + dy * dy) * c2);
+                float3 s = glowCopy(_tex2D(p_TexR, sx, sy), _tex2D(p_TexG, sx, sy), _tex2D(p_TexB, sx, sy), sat, g1);
+                br += w * s.x; bg += w * s.y; bb += w * s.z; bw += w;
+            }
+        }
+    }
+    else
+    {
+        float tr = 1.0f - _expf(-3.125f);
+        for (int j = 0; j < n; j++)
+        {
+            float u = ((float)(j) + 0.5f) / (float)(n);
+            float rr = sig * _sqrtf(-1.38629436f * _log2f(1.0f - u * tr)), an = 2.39996323f * (float)(j);
+            int dx = (int)(_round(rr * _cosf(an))), dy = (int)(_round(rr * _sinf(an)));
+            int sx = p_X + dx, sy = p_Y + dy;
+            sx = sx < 0 ? 0 : (sx > p_Width - 1 ? p_Width - 1 : sx);
+            sy = sy < 0 ? 0 : (sy > p_Height - 1 ? p_Height - 1 : sy);
+            float3 s = glowCopy(_tex2D(p_TexR, sx, sy), _tex2D(p_TexG, sx, sy), _tex2D(p_TexB, sx, sy), sat, g1);
+            br += s.x; bg += s.y; bb += s.z;
+        }
+        bw = (float)(n);
+    }
+    br /= bw; bg /= bw; bb /= bw;
+
+    float3 s0 = glowCopy(r, g, b, sat, g1);
+    float mr = s0.x * br + (0.5f * (s0.x + br) - s0.x * br) * m;
+    float mg = s0.y * bg + (0.5f * (s0.y + bg) - s0.y * bg) * m;
+    float mb = s0.z * bb + (0.5f * (s0.z + bb) - s0.z * bb) * m;
+
+    float er = 0.0f, eg = 0.0f, eb = 0.0f;
+    for (int dy = -1; dy <= 1; dy++)
+    {
+        for (int dx = -1; dx <= 1; dx++)
+        {
+            int sx = p_X + dx, sy = p_Y + dy;
+            sx = sx < 0 ? 0 : (sx > p_Width - 1 ? p_Width - 1 : sx);
+            sy = sy < 0 ? 0 : (sy > p_Height - 1 ? p_Height - 1 : sy);
+            er += r - _tex2D(p_TexR, sx, sy); eg += g - _tex2D(p_TexG, sx, sy); eb += b - _tex2D(p_TexB, sx, sy);
+        }
+    }
+    er /= 9.0f; eg /= 9.0f; eb /= 9.0f;
+
+    float dk = k * ortDetail / 100.0f;
+    float guard = 1.0f + (smooth01(0.03f, 0.15f, luma(r, g, b)) - 1.0f) * ortGuard / 100.0f;
+    float o1 = r + (mr - r) * k * guard + dk * er * guard;
+    float o2 = g + (mg - g) * k * guard + dk * eg * guard;
+    float o3 = b + (mb - b) * k * guard + dk * eb * guard;
+    return make_float3(_fmaxf(o1, 0.0f), _fmaxf(o2, 0.0f), _fmaxf(o3, 0.0f));
+}

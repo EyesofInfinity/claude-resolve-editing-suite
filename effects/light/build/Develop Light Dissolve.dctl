@@ -1,0 +1,234 @@
+// Develop Light Dissolve: light transitions in one Transition DCTL. Lay it on a
+// cut from Edit page > OpenFX > Transition > ResolveFX Color > DCTL and pick this file. Style:
+//   0 Flash Burn: White, the outgoing shot back for a beat, the film burns, the cut lands.
+//     At five frames (24 fps) it plays 2 white, 1 back, 2 burn, as the reference does.
+//   1 Leak: a leak washes in from the edge, the cut happens under its peak, the leak drains away.
+//   2 Burn Through: the film burns from the edge across the frame and the incoming shot shows through behind it.
+//   3 Flash: a dip through white, the cut under the white.
+// Hard 100 holds each part of Flash Burn as a clean step; lower values blend the steps for longer transitions.
+// TRANSITION_PROGRESS runs it, so every frame of a transition is computed afresh. MIT License.
+
+DEFINE_UI_PARAMS(ldStyle,   Style,            DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 3.0, 1.0)
+DEFINE_UI_PARAMS(ldPalette, Palette,          DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 3.0, 1.0)
+DEFINE_UI_PARAMS(ldAmount,  Light,            DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ldEdge,    Edge Angle,       DCTLUI_SLIDER_FLOAT, 200.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(ldHard,    Hard,             DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ldHeat,    Heat,             DCTLUI_SLIDER_FLOAT, 55.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ldScale,   Size,             DCTLUI_SLIDER_FLOAT, 55.0, 10.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ldGrain,   Grain and Dust,   DCTLUI_SLIDER_FLOAT, 45.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ldSeed,    Seed,             DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Style, "0 Flash Burn, 1 Leak, 2 Burn Through, 3 Flash")
+DEFINE_UI_TOOLTIP(Palette, "0 Violet Burn, 1 Classic warm, 2 Lucid, 3 Night blue")
+DEFINE_UI_TOOLTIP(Hard, "100 holds each step clean, as cut on film; lower blends them")
+
+// Develop light: the shared code of Develop Leak, Develop Burn and Develop Light Dissolve.
+// build.py writes it into each effect, so every installed .dctl stands alone. Rec.709 gamma 2.4 in and out;
+// light is added in linear. Coordinates are in frame heights (y 0 to 1 top to bottom, x 0 to width/height),
+// so a leak keeps its shape at any resolution and aspect. MIT License.
+
+__DEVICE__ float toLin(float x) { return _powf(_fmaxf(x, 0.0f), 2.4f); }
+__DEVICE__ float toDisp(float x) { return _powf(_fmaxf(x, 0.0f), 1.0f / 2.4f); }
+__DEVICE__ float luma(float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; }
+__DEVICE__ float lerp1(float a, float b, float t) { return a + (b - a) * t; }
+__DEVICE__ float sstep(float a, float b, float x) { float t = _saturatef((x - a) / (b - a)); return t * t * (3.0f - 2.0f * t); }
+
+__DEVICE__ float3 shoulder(float r, float g, float b)
+{
+    float m = _fmaxf(r, _fmaxf(g, b));
+    if (m <= 0.8f) return make_float3(r, g, b);
+    float nm = 0.8f + 0.2f * _tanhf((m - 0.8f) / 0.2f);
+    float k = nm / m, w = 0.6f * sstep(1.0f, 3.0f, m);
+    return make_float3(lerp1(r * k, nm, w), lerp1(g * k, nm, w), lerp1(b * k, nm, w));
+}
+
+__DEVICE__ float3 lightOut(float r, float g, float b, float k)
+{
+    float3 s = shoulder(r, g, b);
+    float w = _saturatef(k * 4.0f);
+    return make_float3(_saturatef(toDisp(lerp1(r, s.x, w))), _saturatef(toDisp(lerp1(g, s.y, w))), _saturatef(toDisp(lerp1(b, s.z, w))));
+}
+
+__DEVICE__ float hash01(uint x, uint y, uint z)
+{
+    x = x * 1664525u + 1013904223u; y = y * 1664525u + 1013904223u; z = z * 1664525u + 1013904223u;
+    x += y * z; y += z * x; z += x * y;
+    x ^= x >> 16u; y ^= y >> 16u; z ^= z >> 16u;
+    x += y * z; y += z * x; z += x * y;
+    return (float)(x >> 8u) * (1.0f / 16777216.0f);
+}
+
+__DEVICE__ float fade(float t) { return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f); }
+
+__DEVICE__ float vnoise3(float x, float y, float z, uint s)
+{
+    int ix = (int)(x), iy = (int)(y), iz = (int)(z);
+    float tx = fade(x - (float)(ix)), ty = fade(y - (float)(iy)), tz = fade(z - (float)(iz));
+    uint x0 = (uint)(ix), y0 = (uint)(iy), z0 = (uint)(iz) + s * 7919u;
+    float a0 = lerp1(lerp1(hash01(x0, y0, z0), hash01(x0 + 1u, y0, z0), tx), lerp1(hash01(x0, y0 + 1u, z0), hash01(x0 + 1u, y0 + 1u, z0), tx), ty);
+    float a1 = lerp1(lerp1(hash01(x0, y0, z0 + 1u), hash01(x0 + 1u, y0, z0 + 1u), tx), lerp1(hash01(x0, y0 + 1u, z0 + 1u), hash01(x0 + 1u, y0 + 1u, z0 + 1u), tx), ty);
+    return lerp1(a0, a1, tz);
+}
+
+__DEVICE__ float fbm(float x, float y, float z, int n, uint s)
+{
+    float sum = 0.0f, amp = 0.5f, tot = 0.0f, f = 1.0f;
+    for (int i = 0; i < 5; i++) {
+        if (i >= n) break;
+        sum += amp * vnoise3(x * f + 4096.0f + 37.1f * (float)(i), y * f + 4096.0f + 11.7f * (float)(i), z * f + 4096.0f, s + (uint)(i));
+        tot += amp; amp *= 0.5f; f *= 2.03f;
+    }
+    float v = sum / tot;
+    return _saturatef((v - 0.5f) * 1.6f + 0.5f);
+}
+
+__DEVICE__ float3 ramp(float pal, float t, float age)
+{
+    int p = (int)(pal + 0.5f);
+    float c0r = 0.30f, c0g = 0.10f, c0b = 0.42f, c1r = 0.62f, c1g = 0.35f, c1b = 0.47f, c2r = 0.86f, c2g = 0.76f, c2b = 0.68f;
+    float h0r = 0.73f, h0g = 0.16f, h0b = 0.26f, h1r = 0.89f, h1g = 0.35f, h1b = 0.17f, h2r = 0.94f, h2g = 0.50f, h2b = 0.22f;
+    if (p == 1) {
+        c0r = 0.45f; c0g = 0.08f; c0b = 0.05f; c1r = 0.85f; c1g = 0.30f; c1b = 0.08f; c2r = 0.98f; c2g = 0.70f; c2b = 0.35f;
+        h0r = 0.80f; h0g = 0.20f; h0b = 0.04f; h1r = 0.98f; h1g = 0.55f; h1b = 0.12f; h2r = 1.00f; h2g = 0.85f; h2b = 0.55f;
+    }
+    if (p == 2) {
+        c0r = 0.18f; c0g = 0.10f; c0b = 0.45f; c1r = 0.65f; c1g = 0.25f; c1b = 0.65f; c2r = 0.95f; c2g = 0.70f; c2b = 0.75f;
+        h0r = 0.70f; h0g = 0.15f; h0b = 0.50f; h1r = 0.95f; h1g = 0.45f; h1b = 0.45f; h2r = 1.00f; h2g = 0.75f; h2b = 0.55f;
+    }
+    if (p == 3) {
+        c0r = 0.05f; c0g = 0.10f; c0b = 0.35f; c1r = 0.15f; c1g = 0.40f; c1b = 0.75f; c2r = 0.70f; c2g = 0.85f; c2b = 0.98f;
+        h0r = 0.10f; h0g = 0.25f; h0b = 0.60f; h1r = 0.35f; h1g = 0.65f; h1b = 0.95f; h2r = 0.85f; h2g = 0.95f; h2b = 1.00f;
+    }
+    float a = _saturatef(age);
+    float r0 = lerp1(c0r, h0r, a), g0 = lerp1(c0g, h0g, a), b0 = lerp1(c0b, h0b, a);
+    float r1 = lerp1(c1r, h1r, a), g1 = lerp1(c1g, h1g, a), b1 = lerp1(c1b, h1b, a);
+    float r2 = lerp1(c2r, h2r, a), g2 = lerp1(c2g, h2g, a), b2 = lerp1(c2b, h2b, a);
+    float u = _saturatef(t);
+    float r, g, b;
+    if (u < 0.5f) { float k = u * 2.0f; r = lerp1(r0, r1, k); g = lerp1(g0, g1, k); b = lerp1(b0, b1, k); }
+    else { float k = u * 2.0f - 1.0f; r = lerp1(r1, r2, k); g = lerp1(g1, g2, k); b = lerp1(b1, b2, k); }
+    float hot = sstep(1.0f, 1.4f, t);
+    return make_float3(toLin(lerp1(r, 1.0f, hot)), toLin(lerp1(g, 0.96f, hot)), toLin(lerp1(b, 0.90f, hot)));
+}
+
+__DEVICE__ float leakField(float x, float y, float aspect, float deg, float w, float sc, float z, uint s)
+{
+    float a = deg * 0.0174533f, ca = _cosf(a), sa = _sinf(a);
+    float ext = 0.5f * (_fabs(ca) * aspect + _fabs(sa));
+    float sproj = (x - 0.5f * aspect) * ca + (y - 0.5f) * sa;
+    float warp = fbm(x * 1.3f, y * 1.3f, z * 0.35f, 2, s + 40u) - 0.5f;
+    float d = _fmaxf(ext - sproj + 0.45f * warp * w * aspect, 0.0f);
+    float reach = _fmaxf(w * aspect, 0.02f);
+    float e = _expf(-(d / reach) * (d / reach));
+    float cloud = fbm(x / sc, y / sc, z, 3, s);
+    return _saturatef(e * (0.35f + 1.3f * cloud));
+}
+
+__DEVICE__ float burnHeat(float x, float y, float cover, float sc, float z, uint s)
+{
+    float wx = fbm(x / sc * 0.7f, y / sc * 0.7f, z * 0.6f, 2, s + 90u) - 0.5f;
+    float wy = fbm(x / sc * 0.7f + 31.0f, y / sc * 0.7f, z * 0.6f, 2, s + 91u) - 0.5f;
+    float h = fbm((x + 0.6f * wx) / sc, (y + 0.6f * wy) / sc, z, 4, s);
+    float th = 1.0f - cover;
+    return _saturatef((h - th + 0.28f) / 0.62f);
+}
+
+__DEVICE__ float dust(int px, int py, int h, float amount, uint z)
+{
+    float sc = (float)(h) / 1080.0f;
+    int cx = (int)((float)(px) / (2.5f * sc)), cy = (int)((float)(py) / (2.5f * sc));
+    float r = hash01((uint)(cx), (uint)(cy), z * 13u + 5u);
+    float lim = 0.00002f * amount;
+    if (r > lim) return 0.0f;
+    return hash01((uint)(cx), (uint)(cy), z * 13u + 6u) < 0.6f ? -1.0f : 1.0f;
+}
+
+__DEVICE__ float4 burnOver(float r, float g, float b, float x, float y, float aspect, int px, int py, int ph,
+                           float cover, float pal, float age, float sc, float show, float grain, float dst,
+                           float z, uint fz, uint s)
+{
+    float k = sstep(0.0f, 0.35f, burnHeat(x, y, cover, sc, z, s));
+    uint zi = (uint)(z + 1000.0f);
+    float ang = 6.2831853f * ((float)(zi % 1000u) * 0.37f + 0.25f * hash01(zi, s, 71u));
+    float ca = _cosf(ang), sa = _sinf(ang), ext = 0.5f * (_fabs(ca) * aspect + _fabs(sa));
+    float band = 0.5f + 0.5f * ((x - 0.5f * aspect) * ca + (y - 0.5f) * sa) / ext;
+    float cl = fbm(x / (sc * 1.6f), y / (sc * 1.6f), z, 3, s + 200u);
+    float t = 0.05f + 0.95f * _saturatef(0.8f * band + 0.95f * (cl - 0.5f) + 0.15f);
+    float3 c = ramp(pal, t, age);
+    float keep = lerp1(1.0f, show, k);
+    float gr = 1.0f + grain * 0.22f * (hash01((uint)(px), (uint)(py), fz * 3u + s) - 0.5f) * k;
+    float d = dust(px, py, ph, dst * 100.0f, fz + s) * k;
+    float rr = (r * keep + c.x * k) * gr, gg = (g * keep + c.y * k) * gr, bb = (b * keep + c.z * k) * gr;
+    if (d < 0.0f) { rr *= 0.15f; gg *= 0.12f; bb *= 0.12f; }
+    if (d > 0.0f) { rr = rr + 0.6f; gg = gg + 0.55f; bb = bb + 0.45f; }
+    return make_float4(rr, gg, bb, k);
+}
+
+__DEVICE__ float stepAt(float p, float e, float w) { return w <= 0.0001f ? (p >= e ? 1.0f : 0.0f) : sstep(e - w, e + w, p); }
+
+__DEVICE__ float4 transition(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_FromTexR, __TEXTURE__ p_FromTexG, __TEXTURE__ p_FromTexB, __TEXTURE__ p_FromTexA, __TEXTURE__ p_ToTexR, __TEXTURE__ p_ToTexG, __TEXTURE__ p_ToTexB, __TEXTURE__ p_ToTexA)
+{
+    float p = _saturatef(TRANSITION_PROGRESS);
+    float ar = toLin(_tex2D(p_FromTexR, p_X, p_Y)), ag = toLin(_tex2D(p_FromTexG, p_X, p_Y)), ab = toLin(_tex2D(p_FromTexB, p_X, p_Y));
+    float br = toLin(_tex2D(p_ToTexR, p_X, p_Y)), bg = toLin(_tex2D(p_ToTexG, p_X, p_Y)), bb = toLin(_tex2D(p_ToTexB, p_X, p_Y));
+    float hh = (float)(p_Height), aspect = (float)(p_Width) / hh;
+    float x = ((float)(p_X) + 0.5f) / hh, y = ((float)(p_Y) + 0.5f) / hh;
+    uint s = (uint)(ldSeed) * 101u + 11u;
+    int style = (int)(ldStyle + 0.5f);
+    float amt = ldAmount / 100.0f, heat = ldHeat / 100.0f, sc = 0.15f + 0.9f * ldScale / 100.0f;
+    float w = 0.08f * (1.0f - ldHard / 100.0f);
+    uint fz = (uint)(p * 97.0f);
+    float r, g, b, k = 0.0f;
+
+    if (style == 0) {
+        float white = 1.0f - stepAt(p, 0.4f, w);
+        float burn = stepAt(p, 0.6f, w);
+        float cut = p >= 0.999f ? 1.0f : stepAt(p, 0.995f - w, w);
+        float lift = 0.02f * (1.0f - white) * (1.0f - burn);
+        r = lerp1(ar * (1.0f - lift) + lift, 0.97f * (0.94f + 0.06f * ar), white * amt);
+        g = lerp1(ag * (1.0f - lift) + lift, 0.95f * (0.94f + 0.06f * ag), white * amt);
+        b = lerp1(ab * (1.0f - lift) + lift, 0.87f * (0.94f + 0.06f * ab), white * amt);
+        if (burn > 0.0f) {
+            float z = (float)((int)(p * 5.0f)) * 1.0f + ldSeed * 1.3f + (1.0f - ldHard / 100.0f) * p * 4.0f;
+            float age = sstep(0.6f, 0.95f, p) * (0.4f + 0.6f * heat / 0.55f);
+            float4 o = burnOver(r, g, b, x, y, aspect, p_X, p_Y, p_Height, 1.0f, ldPalette, age, sc, 0.05f, ldGrain / 100.0f, ldGrain / 100.0f, z, fz, s);
+            r = lerp1(r, o.x, burn * amt); g = lerp1(g, o.y, burn * amt); b = lerp1(b, o.z, burn * amt);
+        }
+        r = lerp1(r, br, cut); g = lerp1(g, bg, cut); b = lerp1(b, bb, cut);
+        k = _fmaxf(white, burn) * (1.0f - cut) * amt;
+    } else if (style == 1) {
+        float env = _powf(_fmaxf(_sinf(3.1415927f * p), 0.0f), 0.8f);
+        float swap = sstep(0.3f, 0.7f, p);
+        r = lerp1(ar, br, swap); g = lerp1(ag, bg, swap); b = lerp1(ab, bb, swap);
+        float reach = 0.25f + 0.85f * env;
+        float L = leakField(x, y, aspect, ldEdge, reach, sc, p * 1.5f + ldSeed * 1.7f, s);
+        k = sstep(0.05f, 0.95f, L) * env * amt;
+        float3 c = ramp(ldPalette, 0.2f + 0.8f * L + 0.2f * env, 0.5f);
+        r = r * (1.0f - 0.1f * k) + 0.1f * c.x * k + 1.3f * c.x * k;
+        g = g * (1.0f - 0.1f * k) + 0.1f * c.y * k + 1.3f * c.y * k;
+        b = b * (1.0f - 0.1f * k) + 0.1f * c.z * k + 1.3f * c.z * k;
+    } else if (style == 2) {
+        float a = ldEdge * 0.0174533f, ca = _cosf(a), sa = _sinf(a);
+        float ext = 0.5f * (_fabs(ca) * aspect + _fabs(sa));
+        float d = (ext - ((x - 0.5f * aspect) * ca + (y - 0.5f) * sa)) / (2.0f * ext);
+        float n = fbm(x / sc, y / sc, p * 2.0f + ldSeed, 4, s) - 0.5f;
+        float front = p * 1.8f - 0.3f;
+        float q = front - d + 0.35f * n;
+        float behind = sstep(0.0f, 0.12f, q - 0.18f);
+        float zone = sstep(-0.10f, 0.0f, q) * (1.0f - behind);
+        r = lerp1(ar, br, behind); g = lerp1(ag, bg, behind); b = lerp1(ab, bb, behind);
+        float3 c = ramp(ldPalette, 0.1f + 0.95f * sstep(-0.1f, 0.12f, q), heat);
+        k = zone * amt;
+        r = lerp1(r, c.x, k); g = lerp1(g, c.y, k); b = lerp1(b, c.z, k);
+    } else {
+        float env = 1.0f - _fabs(2.0f * p - 1.0f);
+        env = sstep(0.0f, 1.0f, env * (1.0f + ldHard / 100.0f));
+        float cut = stepAt(p, 0.5f, 0.0f);
+        r = lerp1(ar, br, cut); g = lerp1(ag, bg, cut); b = lerp1(ab, bb, cut);
+        float3 c = ramp(ldPalette, 1.4f, 0.5f);
+        k = env * amt;
+        r = lerp1(r, c.x, k); g = lerp1(g, c.y, k); b = lerp1(b, c.z, k);
+    }
+    float3 o = lightOut(r, g, b, k);
+    return make_float4(o.x, o.y, o.z, 1.0f);
+}

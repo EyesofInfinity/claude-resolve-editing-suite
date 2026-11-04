@@ -1,0 +1,36 @@
+// Develop Bloom, sparkle and veil, pass 1 of 2: the horizontal half of two dense Gaussian blurs of the graded
+// picture (Rec.709 gamma 2.4 in). Out, packed: G = the sparkle lobe of the light above 1.4 x Bloom Threshold,
+// B = the wide lobe of all light (the veil source); R is unused. Sizes are the sparkle and glow lobes
+// at Bloom Spread (radius = Spread x 6% of the frame height + 1), uncut Gaussians of the same second moment.
+// Every tap is read, so nothing is left to noise. MIT License.
+
+DEFINE_UI_PARAMS(bloomThr, Bloom Threshold, DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bloomSpr, Bloom Spread,    DCTLUI_SLIDER_FLOAT, 40.0, 1.0, 100.0, 1.0)
+
+__DEVICE__ float luma(float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; }
+__DEVICE__ float toLin(float x) { return _powf(_fmaxf(x, 0.0f), 2.4f); }
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float thrS = toLin(bloomThr / 100.0f) * 1.4f;
+    float rad = bloomSpr / 100.0f * 0.06f * (float)p_Height + 1.0f;
+    float sw = rad / 2.2360680f * 0.8812f, ss = (rad * 0.15f + 1.5f) / 2.4494897f * 0.9181f;
+    int kw = (int)(3.0f * sw) + 1, ks = (int)(3.0f * ss) + 1;
+    float iw = -0.5f / (sw * sw), is = -0.5f / (ss * ss);
+    float accW = 0.0f, accM = 0.0f, accSW = 0.0f, accS = 0.0f;
+    for (int i = -kw; i <= kw; i++)
+    {
+        int x = p_X + i;
+        x = x < 0 ? 0 : (x > p_Width - 1 ? p_Width - 1 : x);
+        float L = luma(toLin(_tex2D(p_TexR, x, p_Y)), toLin(_tex2D(p_TexG, x, p_Y)), toLin(_tex2D(p_TexB, x, p_Y)));
+        float d2 = (float)(i * i);
+        float w = _expf(d2 * iw);
+        accW += w; accM += w * L;
+        if (i >= -ks && i <= ks)
+        {
+            float v = _expf(d2 * is);
+            accSW += v; accS += v * _fmaxf(L - thrS, 0.0f);
+        }
+    }
+    return make_float3(0.0f, accS / accSW, accM / accW);
+}

@@ -1,0 +1,93 @@
+// Develop Lens: a lens's character in one transform DCTL. One lens model, every part its own slider:
+//   Distortion: barrel (positive) or pincushion (negative) by a two-term radial model; barrel is zoomed so the
+//     corners stay filled.
+//   Aberration: lateral chromatic aberration: twelve wavelengths each magnified a little differently from the
+//     centre, so edges toward the corners wear red and blue rims.
+//   Fringe: the purple fringe a fast lens throws round hard highlights.
+//   Vignette: the natural fall-off of light toward the corners (cos^4 law), in linear.
+//   Edge Softness: the corners going soft as a lens's field curves.
+//   Edge Stretch: a wide lens's stretch toward the left and right edges.
+//   Shake: a handheld drift and rotation by TIMELINE_FRAME_INDEX.
+// An OpenFX DCTL effect or a DCTL plugin node. Amount mixes with the picture in display terms; Amount 0 is the input
+// exactly. MIT License.
+
+DEFINE_UI_PARAMS(lnAmount,  Lens,          DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lnDist,    Distortion,    DCTLUI_SLIDER_FLOAT, 15.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lnCA,      Aberration,    DCTLUI_SLIDER_FLOAT, 35.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lnFringe,  Fringe,        DCTLUI_SLIDER_FLOAT, 25.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lnVig,     Vignette,      DCTLUI_SLIDER_FLOAT, 35.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lnSoft,    Edge Softness, DCTLUI_SLIDER_FLOAT, 25.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lnStretch, Edge Stretch,  DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lnShake,   Shake,         DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lnSeed,    Seed,          DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Distortion, "Barrel above 0, pincushion below")
+DEFINE_UI_TOOLTIP(Fringe, "The purple fringe round hard highlights")
+DEFINE_UI_TOOLTIP(Shake, "A handheld drift and rotation; 0 holds the frame")
+
+#include "lens.h"
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (lnAmount <= 0.0f) return c0;
+    float sc = (float)(H) / 1080.0f, fx = (float)(x), fy = (float)(y);
+    float cx = 0.5f * (float)(W) - 0.5f, cy = 0.5f * (float)(H) - 0.5f, hd = _sqrtf(cx * cx + cy * cy);
+    float px = fx, py = fy;
+    if (lnShake > 0.0f) {
+        float t = (float)(TIMELINE_FRAME_INDEX) / 24.0f;
+        uint sd = (uint)(lnSeed) * 431u + 7u;
+        float sk = lnShake / 100.0f;
+        float jx = (fbm(t * 1.3f, 0.5f, 0.0f, 3, sd) - 0.5f) * 28.0f * sc * sk, jy = (fbm(t * 1.3f, 7.5f, 0.0f, 3, sd + 1u) - 0.5f) * 28.0f * sc * sk;
+        float ja = (fbm(t * 0.9f, 3.5f, 0.0f, 3, sd + 2u) - 0.5f) * 0.021f * sk;
+        float dx = fx - cx, dy = fy - cy, ca = _cosf(ja), sa = _sinf(ja);
+        px = cx + dx * ca - dy * sa + jx; py = cy + dx * sa + dy * ca + jy;
+    }
+    float ux = (px - cx) / hd, uy = (py - cy) / hd;
+    if (lnStretch > 0.0f) {
+        float st = lnStretch / 100.0f * 0.35f;
+        ux = ux * (1.0f - st * ux * ux) / (1.0f - st * 0.6f);
+    }
+    float r2 = ux * ux + uy * uy;
+    float k1 = lnDist / 100.0f * 0.30f, k2 = k1 * 0.4f;
+    float zoom = k1 > 0.0f ? 1.0f / (1.0f + k1 + k2) : 1.0f;
+    float dist = (1.0f + k1 * r2 + k2 * r2 * r2) * zoom;
+    float ca = lnCA / 100.0f * 0.006f, soft = lnSoft / 100.0f * 7.0f * sc * r2;
+    float sr = 0.0f, sg = 0.0f, sb = 0.0f, wr = 0.0f, wg = 0.0f, wb = 0.0f;
+    int taps = soft > 0.5f ? 3 : 1;
+    for (int i = 0; i < 12; i++) {
+        float t = ((float)(i) + 0.5f) / 12.0f;
+        float3 wt = specL(t * 0.75f);
+        float mg = dist * (1.0f + ca * (t - 0.5f) * 2.0f);
+        float bx = cx + ux * mg * hd, by = cy + uy * mg * hd;
+        for (int j = 0; j < 3; j++) {
+            if (j >= taps) break;
+            float an = 2.0943951f * (float)(j) + 0.7f * (float)(i);
+            float ox = taps == 1 ? 0.0f : soft * _cosf(an), oy = taps == 1 ? 0.0f : soft * _sinf(an);
+            float3 c = linL(p_TexR, p_TexG, p_TexB, bx + ox, by + oy, W, H);
+            sr += wt.x * c.x; sg += wt.y * c.y; sb += wt.z * c.z;
+            wr += wt.x; wg += wt.y; wb += wt.z;
+        }
+    }
+    float3 l = make_float3(sr / wr, sg / wg, sb / wb);
+    if (lnFringe > 0.0f) {
+        float fr = 3.0f * sc;
+        float hot = 0.0f;
+        for (int i = 0; i < 8; i++) {
+            float an = 0.7853982f * (float)(i);
+            float3 c = linL(p_TexR, p_TexG, p_TexB, cx + ux * dist * hd + fr * _cosf(an), cy + uy * dist * hd + fr * _sinf(an), W, H);
+            hot = _fmaxf(hot, sstep(0.55f, 0.95f, luma(c.x, c.y, c.z)));
+        }
+        float here = luma(l.x, l.y, l.z);
+        float fz = hot * (1.0f - sstep(0.25f, 0.6f, here)) * lnFringe / 100.0f * (0.4f + 0.6f * _sqrtf(r2));
+        l = make_float3(l.x + fz * 0.18f, l.y + fz * 0.02f, l.z + fz * 0.32f);
+    }
+    float tn = _sqrtf(r2) * 0.7f * lnVig / 100.0f * 1.4f;
+    float c2 = 1.0f / (1.0f + tn * tn);
+    float vg = c2 * c2;
+    l = make_float3(l.x * vg, l.y * vg, l.z * vg);
+    float3 o = make_float3(_saturatef(toDisp(l.x)), _saturatef(toDisp(l.y)), _saturatef(toDisp(l.z)));
+    float a = lnAmount / 100.0f;
+    return make_float3(_saturatef(lerp1(c0.x, o.x, a)), _saturatef(lerp1(c0.y, o.y, a)), _saturatef(lerp1(c0.z, o.z, a)));
+}

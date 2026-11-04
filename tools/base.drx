@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--DbAppVer="21.1.1.0010" DbPrjVer="17"-->
+<Gallery::GyStill DbId="2a16610f-09d3-5bdf-9ab5-79cac9dfaa7d">
+ <FieldsBlob/>
+ <SrcHint>Develop</SrcHint>
+ <SrcType>1</SrcType>
+ <GalleryPath></GalleryPath>
+ <Label>1.1</Label>
+ <RecTC>00:00:00:00</RecTC>
+ <SrcTC>00:00:00:00</SrcTC>
+ <DpxDescriptor>50</DpxDescriptor>
+ <Width>1920</Width>
+ <Height>1080</Height>
+ <BitDepth>10</BitDepth>
+ <PAR>1</PAR>
+ <Endianship>1</Endianship>
+ <CreateTime>2026-01-01T00:00:00.000</CreateTime>
+ <pClipFullVer>
+  <ListMgt::LmVersion DbId="52d17aa4-4eb9-55f7-ad8f-7b2b38837992">
+   <FieldsBlob/>
+   <Name/>
+   <HasCorrection>true</HasCorrection>
+   <VerType>0</VerType>
+   <ImplVersion>1</ImplVersion>
+   <IncludedInRecording>true</IncludedInRecording>
+   <FlatPassEnabled>false</FlatPassEnabled>
+   <RGBAOutputEnabled>false</RGBAOutputEnabled>
+   <Body>8128b52ffd24e4450600440b0ada01080110011a4808800f10b8081d0000803f20800f28f40735a3df7f3f38800f40b80848ffffffff0f7a24003a6120be0128b4013801402c4a3c0a3308011801322d122b08011a0a08a08180b008120210081a1b08a1132a11446576656c6f705c626173652e6463746c12050304050612520c0a0a08818080800c120210026091f4a2e5c7024a0e080110501a080801104018012001520e080210401a0818022001580160a2e8c5ca8f0520a2e8c5ca8f050600484a44bcae4cc1ea999ee18e15044a0f05533c08</Body>
+   <UseVersionClipProcParams>true</UseVersionClipProcParams>
+  </ListMgt::LmVersion>
+ </pClipFullVer>
+ <pTrackVer>
+  <ListMgt::LmVersion DbId="3f9ff495-c3c3-580c-ab2b-245b582bdc7e">
+   <FieldsBlob/>
+   <Name/>
+   <HasCorrection>false</HasCorrection>
+   <VerType>1</VerType>
+   <ImplVersion>1</ImplVersion>
+   <IncludedInRecording>true</IncludedInRecording>
+   <FlatPassEnabled>false</FlatPassEnabled>
+   <RGBAOutputEnabled>false</RGBAOutputEnabled>
+   <Body>8128b52ffd2090c50300c4060a6b08ffffffff0f10011a4808800f10b8081d0000803f20800f28b808350000803f38800f40b808487a240000803f0020d8c90a4a0408011040520408021040580160a2e8c5ca8f051a2120be0128b401380140554a00520c0a0a08818080800c120210026091f4a2e5c7020300333d803b9374a932</Body>
+   <UseVersionClipProcParams>true</UseVersionClipProcParams>
+  </ListMgt::LmVersion>
+ </pTrackVer>
+ <PrimaryCCMode>0</PrimaryCCMode>
+ <Vsr/>
+ <ClipThumbnails/>
+ <TrackThumbnails/>
+ <ReelName/>
+</Gallery::GyStill>

@@ -1,0 +1,76 @@
+// Develop Zap: lightning between two points. The
+// bolt is the straight line from Start to End bent sideways by layered noise pinned at both ends, so it forks and
+// kinks like a discharge; branches split off it and die out; it re-strikes Rate times a second, each strike a new
+// path, flickering between strikes. A white-hot core inside a coloured glow, added in linear. Moves by
+// TIMELINE_FRAME_INDEX: run it as an OpenFX DCTL effect or a DCTL plugin node. MIT License.
+
+DEFINE_UI_PARAMS(zpAmount, Zap,          DCTLUI_SLIDER_FLOAT, 80.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(zpX0,     Start X,      DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(zpY0,     Start Y,      DCTLUI_SLIDER_FLOAT, 5.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(zpX1,     End X,        DCTLUI_SLIDER_FLOAT, 62.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(zpY1,     End Y,        DCTLUI_SLIDER_FLOAT, 95.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(zpChaos,  Chaos,        DCTLUI_SLIDER_FLOAT, 45.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(zpWidth,  Width,        DCTLUI_SLIDER_FLOAT, 30.0, 1.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(zpGlow,   Glow,         DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(zpBranch, Branches,     DCTLUI_SLIDER_FLOAT, 2.0, 0.0, 4.0, 1.0)
+DEFINE_UI_PARAMS(zpRate,   Rate,         DCTLUI_SLIDER_FLOAT, 6.0, 0.0, 24.0, 1.0)
+DEFINE_UI_PARAMS(zpHue,    Hue,          DCTLUI_SLIDER_FLOAT, 225.0, 0.0, 360.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Rate, "New strikes a second; 0 holds one bolt still")
+DEFINE_UI_TOOLTIP(Start X, "Percent of the frame's width; Y is percent of its height")
+
+#include "../light/light.h"
+
+__DEVICE__ float3 hueRGB3(float h)
+{
+    float k = _fmod(h / 60.0f + 600.0f, 6.0f);
+    return make_float3(toLin(_saturatef(_fabs(k - 3.0f) - 1.0f)), toLin(_saturatef(2.0f - _fabs(k - 2.0f))), toLin(_saturatef(2.0f - _fabs(k - 4.0f))));
+}
+
+__DEVICE__ float boltDist(float x, float y, float ax, float ay, float bx, float by, float chaos, float z, uint s, float tlo)
+{
+    float dx = bx - ax, dy = by - ay, L = _sqrtf(dx * dx + dy * dy) + 1e-5f;
+    float ux = dx / L, uy = dy / L;
+    float t = ((x - ax) * ux + (y - ay) * uy) / L;
+    if (t < tlo || t > 1.0f) return 1e3f;
+    float perp = (x - ax) * -uy + (y - ay) * ux;
+    float pin = _sinf(3.1415927f * _saturatef(t));
+    float off = 0.0f, amp = 0.16f * chaos * L, f = 3.0f;
+    for (int o = 0; o < 5; o++) {
+        off += amp * (vnoise3(t * f + 37.0f * (float)(o) + 1000.0f, z + 1000.0f, 0.0f, s + (uint)(o)) - 0.5f);
+        amp *= 0.5f; f *= 2.3f;
+    }
+    return _fabs(perp - off * pin);
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float r = toLin(_tex2D(p_TexR, p_X, p_Y)), g = toLin(_tex2D(p_TexG, p_X, p_Y)), b = toLin(_tex2D(p_TexB, p_X, p_Y));
+    if (zpAmount <= 0.0f) return make_float3(toDisp(r), toDisp(g), toDisp(b));
+    float hh = (float)(p_Height), aspect = (float)(p_Width) / hh;
+    float x = ((float)(p_X) + 0.5f) / hh, y = ((float)(p_Y) + 0.5f) / hh;
+    float ax = zpX0 / 100.0f * aspect, ay = zpY0 / 100.0f, bx = zpX1 / 100.0f * aspect, by = zpY1 / 100.0f;
+    float t = (float)(TIMELINE_FRAME_INDEX) / 24.0f;
+    float strike = zpRate > 0.0f ? _floorf(t * zpRate) : 0.0f;
+    float since = zpRate > 0.0f ? t * zpRate - strike : 0.0f;
+    float flick = zpRate > 0.0f ? (0.55f + 0.45f * _expf(-4.0f * since)) * (0.8f + 0.2f * hash01((uint)(TIMELINE_FRAME_INDEX) + 9u, 1u, 2u)) : 1.0f;
+    float chaos = zpChaos / 100.0f, w = 0.0006f + 0.004f * zpWidth / 100.0f;
+    float d = boltDist(x, y, ax, ay, bx, by, chaos, strike * 3.1f, 11u, 0.0f);
+    int nb = (int)(zpBranch + 0.5f);
+    for (int k = 0; k < 4; k++) {
+        if (k >= nb) break;
+        float tb = 0.25f + 0.5f * hash01((uint)(strike) + 100u, (uint)(k), 3u);
+        float ang = (hash01((uint)(strike) + 100u, (uint)(k), 4u) - 0.5f) * 1.6f;
+        float px = ax + (bx - ax) * tb, py = ay + (by - ay) * tb;
+        float dxm = bx - ax, dym = by - ay, ca = _cosf(ang), sa = _sinf(ang);
+        float ex = px + 0.45f * (dxm * ca - dym * sa) * (1.0f - tb), ey = py + 0.45f * (dxm * sa + dym * ca) * (1.0f - tb);
+        float db = boltDist(x, y, px, py, ex, ey, chaos * 1.2f, strike * 3.1f + (float)(k) * 7.0f, 40u + (uint)(k) * 5u, 0.0f);
+        d = _fminf(d, db * 1.6f);
+    }
+    float core = _expf(-(d / w) * (d / w));
+    float glow = _expf(-d / (w * (4.0f + 14.0f * zpGlow / 100.0f)));
+    float3 hc = hueRGB3(zpHue);
+    float k = zpAmount / 100.0f * flick;
+    r += k * (2.5f * core + 0.9f * glow * hc.x); g += k * (2.5f * core + 0.9f * glow * hc.y); b += k * (2.5f * core + 0.9f * glow * hc.z);
+    return lightOut(r, g, b, _saturatef(k * (core + glow)));
+}

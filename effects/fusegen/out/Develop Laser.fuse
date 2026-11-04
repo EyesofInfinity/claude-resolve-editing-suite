@@ -1,0 +1,1148 @@
+--[[ Develop Laser as a Fusion Fuse: the transform DCTL effects/stage/build/Develop Laser.dctl run on the GPU through DVIPComputeNode,
+every pixel calling the DCTL's own main function with the DCTL's own controls. Written by
+effects/fusegen/fusegen.py; regenerate it, never edit it. The picture is read and written in the values
+the DCTL sees in Resolve (Rec.709 gamma 2.4 display values in Develop), with no conversion.
+Frame Offset adds to the comp frame for the DCTL's frame value; Hold Frame uses Frame Offset alone.
+If the kernel cannot run, the output is solid magenta and the reason is in the Fusion console, in the
+tool's data DevelopFuse.Status and in %TEMP%\DevelopFuse.log. MIT License. ]]
+
+FuRegisterClass("DevelopLaser", CT_Tool, {
+	REGS_Category = "Fuses\\Develop",
+	REGS_OpIconString = "DL",
+	REGS_OpDescription = "Develop Laser (Develop DCTL in a Fuse)",
+	REG_NoObjMatCtrls = true,
+	REG_NoMotionBlurCtrls = true,
+	})
+
+DvName = "Develop Laser"
+DvKind = "transform"
+DvDctl = "stage/build/Develop Laser.dctl"
+
+-- the DCTL slider steps, for the record and the inverse mapping (Fusion sliders have no step)
+DvSteps = { lzAmount = 1.0, lzMode = 1.0, lzX0 = 1.0, lzY0 = 1.0, lzX1 = 1.0, lzY1 = 1.0, lzWidth = 1.0, lzGlow = 1.0, lzHaze = 1.0, lzHue = 1.0, lzFlick = 1.0, lzLength = 1.0, lzRate = 1.0, lzChaos = 1.0, lzBranch = 1.0, lzCount = 1.0, lzAngle = 1.0, lzSpread = 1.0, lzSize = 1.0, lzEvery = 1.0, lzLife = 1.0, lzPoints = 1.0, lzSeed = 1.0 }
+
+-- this Fuse's own C names for its kernels and parameter structs (never shared with another Fuse)
+DvKernelName = "DevelopLaserK663f4ffa"
+DvParamsName = "DevelopLaserP663f4ffa"
+DvSplitName = "DevelopLaserS663f4ffa"
+DvSplitParamsName = "DevelopLaserSP663f4ffa"
+
+DvParams = [[
+	float lzAmount;
+	float lzMode;
+	float lzX0;
+	float lzY0;
+	float lzX1;
+	float lzY1;
+	float lzWidth;
+	float lzGlow;
+	float lzHaze;
+	float lzHue;
+	float lzFlick;
+	float lzLength;
+	float lzRate;
+	float lzChaos;
+	float lzBranch;
+	float lzCount;
+	float lzAngle;
+	float lzSpread;
+	float lzSize;
+	float lzEvery;
+	float lzLife;
+	float lzPoints;
+	float lzSeed;
+	float dvProgress;
+	int dvFrame;
+	int dvFlipY;
+	int dvSize[2];
+]]
+
+DvSplitParams = [[
+	int ch;
+	int flipY;
+	int size[2];
+]]
+
+DvSplitSource = [[
+// one channel of an image as its own texture (the channel in every component), rows turned top-down when
+// flipY is set, so a DCTL's _tex2D(plane, x, y) reads what Resolve hands it
+__KERNEL__ void DevelopLaserS663f4ffa(__CONSTANTREF__ DevelopLaserSP663f4ffa *params, __TEXTURE2D__ src, __TEXTURE2D_WRITE__ dst)
+{
+    DEFINE_KERNEL_ITERATORS_XY(x, y)
+    if (x < params->size[0] && y < params->size[1])
+    {
+        int sy = params->flipY != 0 ? params->size[1] - 1 - y : y;
+        float4 c = _tex2DVec4(src, x, sy);
+        float v = params->ch == 0 ? c.x : (params->ch == 1 ? c.y : (params->ch == 2 ? c.z : c.w));
+        _tex2DVec4Write(dst, x, y, to_float4(v, v, v, v));
+    }
+}
+]]
+
+DvMath = [[
+// fusegen dctl math (README section 2): the argument casts Resolve gives a DCTL on OpenCL and Metal
+#if !defined(KERNEL_TYPE_IS_DCTL) && defined(DEVICE_IS_OPENCL)
+#undef _fabs
+#define _fabs(_A) fabs((float)(_A))
+#undef _powf
+#define _powf(_A, _B) native_powr((float)(_A), (float)(_B))
+#undef _logf
+#define _logf(_A) native_log((float)(_A))
+#undef _log2f
+#define _log2f(_A) native_log2((float)(_A))
+#undef _log10f
+#define _log10f(_A) native_log10((float)(_A))
+#undef _expf
+#define _expf(_A) native_exp((float)(_A))
+#undef _exp2f
+#define _exp2f(_A) native_exp2((float)(_A))
+#undef _exp10f
+#define _exp10f(_A) native_exp10((float)(_A))
+#undef _copysignf
+#define _copysignf(_A, _B) copysign((float)(_A), (float)(_B))
+#undef _fmaxf
+#define _fmaxf(_A, _B) fmax((float)(_A), (float)(_B))
+#undef _fminf
+#define _fminf(_A, _B) fmin((float)(_A), (float)(_B))
+#undef _clampf
+#define _clampf(_A, _B, _C) clamp((float)(_A), (float)(_B), (float)(_C))
+#undef _sqrtf
+#define _sqrtf(_A) native_sqrt((float)(_A))
+#undef _ceilf
+#define _ceilf(_A) ceil((float)(_A))
+#undef _floorf
+#define _floorf(_A) floor((float)(_A))
+#undef _fmod
+#define _fmod(_A, _B) fmod((float)(_A), (float)(_B))
+#undef _round
+#define _round(_A) round((float)(_A))
+#undef _atan2f
+#define _atan2f(_A, _B) atan2((float)(_A), (float)(_B))
+#undef _sinf
+#define _sinf(_A) native_sin((float)(_A))
+#undef _cosf
+#define _cosf(_A) native_cos((float)(_A))
+#undef _tanf
+#define _tanf(_A) native_tan((float)(_A))
+#undef _acosf
+#define _acosf(_A) acos((float)(_A))
+#undef _asinf
+#define _asinf(_A) asin((float)(_A))
+#undef _sinpif
+#define _sinpif(_A) sinpi((float)(_A))
+#undef _cospif
+#define _cospif(_A) cospi((float)(_A))
+#undef _acoshf
+#define _acoshf(_A) acosh((float)(_A))
+#undef _asinhf
+#define _asinhf(_A) asinh((float)(_A))
+#undef _atanhf
+#define _atanhf(_A) atanh((float)(_A))
+#undef _coshf
+#define _coshf(_A) cosh((float)(_A))
+#undef _sinhf
+#define _sinhf(_A) sinh((float)(_A))
+#undef _tanhf
+#define _tanhf(_A) tanh((float)(_A))
+#undef _truncf
+#define _truncf(_A) trunc((float)(_A))
+#undef _fdimf
+#define _fdimf(_A, _B) fdim((float)(_A), (float)(_B))
+#undef _fmaf
+#define _fmaf(_A, _B, _C) fma((float)(_A), (float)(_B), (float)(_C))
+#undef _rsqrtf
+#define _rsqrtf(_A) rsqrt((float)(_A))
+#undef _saturatef
+#define _saturatef(_A) clamp((float)(_A), 0.0f, 1.0f)
+#undef _hypotf
+#define _hypotf(_A, _B) hypot((float)(_A), (float)(_B))
+#elif !defined(KERNEL_TYPE_IS_DCTL) && defined(DEVICE_IS_METAL)
+#undef _fabs
+#define _fabs(_A) fabs((float)(_A))
+#undef _powf
+#define _powf(_A, _B) pow((float)(_A), (float)(_B))
+#undef _logf
+#define _logf(_A) log((float)(_A))
+#undef _log2f
+#define _log2f(_A) log2((float)(_A))
+#undef _log10f
+#define _log10f(_A) log10((float)(_A))
+#undef _expf
+#define _expf(_A) exp((float)(_A))
+#undef _exp2f
+#define _exp2f(_A) exp2((float)(_A))
+#undef _exp10f
+#define _exp10f(_A) exp10((float)(_A))
+#undef _copysignf
+#define _copysignf(_A, _B) copysign((float)(_A), (float)(_B))
+#undef _fmaxf
+#define _fmaxf(_A, _B) fmax((float)(_A), (float)(_B))
+#undef _fminf
+#define _fminf(_A, _B) fmin((float)(_A), (float)(_B))
+#undef _clampf
+#define _clampf(_A, _B, _C) clamp((float)(_A), (float)(_B), (float)(_C))
+#undef _sqrtf
+#define _sqrtf(_A) sqrt((float)(_A))
+#undef _ceilf
+#define _ceilf(_A) ceil((float)(_A))
+#undef _floorf
+#define _floorf(_A) floor((float)(_A))
+#undef _fmod
+#define _fmod(_A, _B) fmod((float)(_A), (float)(_B))
+#undef _round
+#define _round(_A) round((float)(_A))
+#undef _atan2f
+#define _atan2f(_A, _B) atan2((float)(_A), (float)(_B))
+#undef _sinf
+#define _sinf(_A) sin((float)(_A))
+#undef _cosf
+#define _cosf(_A) cos((float)(_A))
+#undef _tanf
+#define _tanf(_A) tan((float)(_A))
+#undef _acosf
+#define _acosf(_A) acos((float)(_A))
+#undef _asinf
+#define _asinf(_A) asin((float)(_A))
+#undef _sinpif
+#define _sinpif(_A) sinpi((float)(_A))
+#undef _cospif
+#define _cospif(_A) cospi((float)(_A))
+#undef _acoshf
+#define _acoshf(_A) acosh((float)(_A))
+#undef _asinhf
+#define _asinhf(_A) asinh((float)(_A))
+#undef _atanhf
+#define _atanhf(_A) atanh((float)(_A))
+#undef _coshf
+#define _coshf(_A) cosh((float)(_A))
+#undef _sinhf
+#define _sinhf(_A) sinh((float)(_A))
+#undef _tanhf
+#define _tanhf(_A) tanh((float)(_A))
+#undef _truncf
+#define _truncf(_A) trunc((float)(_A))
+#undef _fdimf
+#define _fdimf(_A, _B) fdim((float)(_A), (float)(_B))
+#undef _fmaf
+#define _fmaf(_A, _B, _C) fma((float)(_A), (float)(_B), (float)(_C))
+#undef _rsqrtf
+#define _rsqrtf(_A) rsqrt((float)(_A))
+#undef _saturatef
+#define _saturatef(_A) saturate((float)(_A))
+#undef _hypotf
+#define _hypotf(_A, _B) sqrt((float)(_A) * (float)(_A) + (float)(_B) * (float)(_B))
+#endif
+]]
+
+DvMapping = [[
+// fusegen mapping (effects/fusegen/README.md section 2): a DCTL reads one channel with _tex2D(plane, x, y);
+// here each plane is a texture holding that channel, read at whole-pixel coordinates by the default sampler
+#define dvTex2D(dv_t, dv_x, dv_y) (_tex2DVec4((dv_t), (dv_x), (dv_y)).x)
+]]
+
+DvCompat = [[
+// fusegen compatibility, used only when the plain source does not build: Resolve's DCTL names for the vector
+// constructors, over Fusion's own
+#ifndef make_float2
+#define make_float2(a, b) to_float2((a), (b))
+#endif
+#ifndef make_float3
+#define make_float3(a, b, c) to_float3((a), (b), (c))
+#endif
+#ifndef make_float4
+#define make_float4(a, b, c, d) to_float4((a), (b), (c), (d))
+#endif
+]]
+
+DvKernelText = [[
+// Develop Laser: a beam, two kinds of arc and a muzzle flash, in one transform DCTL, each built from the light itself:
+//   0 Laser Beam: a straight beam from Start to End, seen by its scatter: a white-hot core (the camera's sensor clips
+//     where the beam is densest), a coloured glow round it, and a wide faint scatter in the haze drifting along it
+//     (Haze). It shimmers along its length and flickers frame to frame (Flicker); a hot spot where it leaves the
+//     emitter and where it strikes, the surface round the strike lit by it. Length under 100 makes it a bolt that
+//     travels Start to End Rate times a second.
+//   1 Zap To: an arc from Start to End, its path bent by layered noise pinned at both ends, forking (Branches), a new
+//     path Rate times a second; each strike's leader reaches part way on its first frame and lands on the next, the
+//     contact points glow white, and the arc lights the scene round it.
+//   2 Zap From: Count arcs thrown out from Start, as from a charged electrode, over Spread degrees about Angle and out
+//     to Size, each thinning and dying toward its tip, a new set Rate times a second.
+//   3 Muzzle Flash: at Start, pointing along Angle: a short star of hot gas, a forward flame and Points side petals
+//     round a white core, ragged at the edges, a few burning grains flung forward. It fires every Interval frames by
+//     dvFrame and lives Life frames, white-yellow on the first, larger, cooler and fainter after; its
+//     light falls on the scene round it. Interval 0 holds the first frame.
+// Light is added in linear, the scene relit by multiplying, so black stays black away from the light. Amount 0 is the
+// input exactly. An OpenFX DCTL effect or a DCTL plugin node. MIT License.
+
+// fusegen ui: lzAmount
+// fusegen ui: lzMode
+// fusegen ui: lzX0
+// fusegen ui: lzY0
+// fusegen ui: lzX1
+// fusegen ui: lzY1
+// fusegen ui: lzWidth
+// fusegen ui: lzGlow
+// fusegen ui: lzHaze
+// fusegen ui: lzHue
+// fusegen ui: lzFlick
+// fusegen ui: lzLength
+// fusegen ui: lzRate
+// fusegen ui: lzChaos
+// fusegen ui: lzBranch
+// fusegen ui: lzCount
+// fusegen ui: lzAngle
+// fusegen ui: lzSpread
+// fusegen ui: lzSize
+// fusegen ui: lzEvery
+// fusegen ui: lzLife
+// fusegen ui: lzPoints
+// fusegen ui: lzSeed
+
+// fusegen tip: Mode
+// fusegen tip: Start X
+// fusegen tip: Length
+// fusegen tip: Rate
+// fusegen tip: Angle
+// fusegen tip: Size
+// fusegen tip: Interval
+// fusegen tip: Life
+// fusegen tip: Points
+
+// Develop light: the shared code of Develop Leak, Develop Burn and Develop Light Dissolve.
+// build.py writes it into each effect, so every installed .dctl stands alone. Rec.709 gamma 2.4 in and out;
+// light is added in linear. Coordinates are in frame heights (y 0 to 1 top to bottom, x 0 to width/height),
+// so a leak keeps its shape at any resolution and aspect. MIT License.
+
+__DEVICE__ float toLin(float x) { return _powf(_fmaxf(x, 0.0f), 2.4f); }
+__DEVICE__ float toDisp(float x) { return _powf(_fmaxf(x, 0.0f), 1.0f / 2.4f); }
+__DEVICE__ float luma(float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; }
+__DEVICE__ float lerp1(float a, float b, float t) { return a + (b - a) * t; }
+__DEVICE__ float sstep(float a, float b, float x) { float t = _saturatef((x - a) / (b - a)); return t * t * (3.0f - 2.0f * t); }
+
+__DEVICE__ float3 shoulder(float r, float g, float b)
+{
+    float m = _fmaxf(r, _fmaxf(g, b));
+    if (m <= 0.8f) return make_float3(r, g, b);
+    float nm = 0.8f + 0.2f * _tanhf((m - 0.8f) / 0.2f);
+    float k = nm / m, w = 0.6f * sstep(1.0f, 3.0f, m);
+    return make_float3(lerp1(r * k, nm, w), lerp1(g * k, nm, w), lerp1(b * k, nm, w));
+}
+
+__DEVICE__ float3 lightOut(float r, float g, float b, float k)
+{
+    float3 s = shoulder(r, g, b);
+    float w = _saturatef(k * 4.0f);
+    return make_float3(_saturatef(toDisp(lerp1(r, s.x, w))), _saturatef(toDisp(lerp1(g, s.y, w))), _saturatef(toDisp(lerp1(b, s.z, w))));
+}
+
+__DEVICE__ float hash01(uint x, uint y, uint z)
+{
+    x = x * 1664525u + 1013904223u; y = y * 1664525u + 1013904223u; z = z * 1664525u + 1013904223u;
+    x += y * z; y += z * x; z += x * y;
+    x ^= x >> 16u; y ^= y >> 16u; z ^= z >> 16u;
+    x += y * z; y += z * x; z += x * y;
+    return (float)(x >> 8u) * (1.0f / 16777216.0f);
+}
+
+__DEVICE__ float fade(float t) { return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f); }
+
+__DEVICE__ float vnoise3(float x, float y, float z, uint s)
+{
+    int ix = (int)(x), iy = (int)(y), iz = (int)(z);
+    float tx = fade(x - (float)(ix)), ty = fade(y - (float)(iy)), tz = fade(z - (float)(iz));
+    uint x0 = (uint)(ix), y0 = (uint)(iy), z0 = (uint)(iz) + s * 7919u;
+    float a0 = lerp1(lerp1(hash01(x0, y0, z0), hash01(x0 + 1u, y0, z0), tx), lerp1(hash01(x0, y0 + 1u, z0), hash01(x0 + 1u, y0 + 1u, z0), tx), ty);
+    float a1 = lerp1(lerp1(hash01(x0, y0, z0 + 1u), hash01(x0 + 1u, y0, z0 + 1u), tx), lerp1(hash01(x0, y0 + 1u, z0 + 1u), hash01(x0 + 1u, y0 + 1u, z0 + 1u), tx), ty);
+    return lerp1(a0, a1, tz);
+}
+
+__DEVICE__ float fbm(float x, float y, float z, int n, uint s)
+{
+    float sum = 0.0f, amp = 0.5f, tot = 0.0f, f = 1.0f;
+    for (int i = 0; i < 5; i++) {
+        if (i >= n) break;
+        sum += amp * vnoise3(x * f + 4096.0f + 37.1f * (float)(i), y * f + 4096.0f + 11.7f * (float)(i), z * f + 4096.0f, s + (uint)(i));
+        tot += amp; amp *= 0.5f; f *= 2.03f;
+    }
+    float v = sum / tot;
+    return _saturatef((v - 0.5f) * 1.6f + 0.5f);
+}
+
+__DEVICE__ float3 ramp(float pal, float t, float age)
+{
+    int p = (int)(pal + 0.5f);
+    float c0r = 0.30f, c0g = 0.10f, c0b = 0.42f, c1r = 0.62f, c1g = 0.35f, c1b = 0.47f, c2r = 0.86f, c2g = 0.76f, c2b = 0.68f;
+    float h0r = 0.73f, h0g = 0.16f, h0b = 0.26f, h1r = 0.89f, h1g = 0.35f, h1b = 0.17f, h2r = 0.94f, h2g = 0.50f, h2b = 0.22f;
+    if (p == 1) {
+        c0r = 0.45f; c0g = 0.08f; c0b = 0.05f; c1r = 0.85f; c1g = 0.30f; c1b = 0.08f; c2r = 0.98f; c2g = 0.70f; c2b = 0.35f;
+        h0r = 0.80f; h0g = 0.20f; h0b = 0.04f; h1r = 0.98f; h1g = 0.55f; h1b = 0.12f; h2r = 1.00f; h2g = 0.85f; h2b = 0.55f;
+    }
+    if (p == 2) {
+        c0r = 0.18f; c0g = 0.10f; c0b = 0.45f; c1r = 0.65f; c1g = 0.25f; c1b = 0.65f; c2r = 0.95f; c2g = 0.70f; c2b = 0.75f;
+        h0r = 0.70f; h0g = 0.15f; h0b = 0.50f; h1r = 0.95f; h1g = 0.45f; h1b = 0.45f; h2r = 1.00f; h2g = 0.75f; h2b = 0.55f;
+    }
+    if (p == 3) {
+        c0r = 0.05f; c0g = 0.10f; c0b = 0.35f; c1r = 0.15f; c1g = 0.40f; c1b = 0.75f; c2r = 0.70f; c2g = 0.85f; c2b = 0.98f;
+        h0r = 0.10f; h0g = 0.25f; h0b = 0.60f; h1r = 0.35f; h1g = 0.65f; h1b = 0.95f; h2r = 0.85f; h2g = 0.95f; h2b = 1.00f;
+    }
+    float a = _saturatef(age);
+    float r0 = lerp1(c0r, h0r, a), g0 = lerp1(c0g, h0g, a), b0 = lerp1(c0b, h0b, a);
+    float r1 = lerp1(c1r, h1r, a), g1 = lerp1(c1g, h1g, a), b1 = lerp1(c1b, h1b, a);
+    float r2 = lerp1(c2r, h2r, a), g2 = lerp1(c2g, h2g, a), b2 = lerp1(c2b, h2b, a);
+    float u = _saturatef(t);
+    float r, g, b;
+    if (u < 0.5f) { float k = u * 2.0f; r = lerp1(r0, r1, k); g = lerp1(g0, g1, k); b = lerp1(b0, b1, k); }
+    else { float k = u * 2.0f - 1.0f; r = lerp1(r1, r2, k); g = lerp1(g1, g2, k); b = lerp1(b1, b2, k); }
+    float hot = sstep(1.0f, 1.4f, t);
+    return make_float3(toLin(lerp1(r, 1.0f, hot)), toLin(lerp1(g, 0.96f, hot)), toLin(lerp1(b, 0.90f, hot)));
+}
+
+__DEVICE__ float leakField(float x, float y, float aspect, float deg, float w, float sc, float z, uint s)
+{
+    float a = deg * 0.0174533f, ca = _cosf(a), sa = _sinf(a);
+    float ext = 0.5f * (_fabs(ca) * aspect + _fabs(sa));
+    float sproj = (x - 0.5f * aspect) * ca + (y - 0.5f) * sa;
+    float warp = fbm(x * 1.3f, y * 1.3f, z * 0.35f, 2, s + 40u) - 0.5f;
+    float d = _fmaxf(ext - sproj + 0.45f * warp * w * aspect, 0.0f);
+    float reach = _fmaxf(w * aspect, 0.02f);
+    float e = _expf(-(d / reach) * (d / reach));
+    float cloud = fbm(x / sc, y / sc, z, 3, s);
+    return _saturatef(e * (0.35f + 1.3f * cloud));
+}
+
+__DEVICE__ float burnHeat(float x, float y, float cover, float sc, float z, uint s)
+{
+    float wx = fbm(x / sc * 0.7f, y / sc * 0.7f, z * 0.6f, 2, s + 90u) - 0.5f;
+    float wy = fbm(x / sc * 0.7f + 31.0f, y / sc * 0.7f, z * 0.6f, 2, s + 91u) - 0.5f;
+    float h = fbm((x + 0.6f * wx) / sc, (y + 0.6f * wy) / sc, z, 4, s);
+    float th = 1.0f - cover;
+    return _saturatef((h - th + 0.28f) / 0.62f);
+}
+
+__DEVICE__ float dust(int px, int py, int h, float amount, uint z)
+{
+    float sc = (float)(h) / 1080.0f;
+    int cx = (int)((float)(px) / (2.5f * sc)), cy = (int)((float)(py) / (2.5f * sc));
+    float r = hash01((uint)(cx), (uint)(cy), z * 13u + 5u);
+    float lim = 0.00002f * amount;
+    if (r > lim) return 0.0f;
+    return hash01((uint)(cx), (uint)(cy), z * 13u + 6u) < 0.6f ? -1.0f : 1.0f;
+}
+
+__DEVICE__ float4 burnOver(float r, float g, float b, float x, float y, float aspect, int px, int py, int ph,
+                           float cover, float pal, float age, float sc, float show, float grain, float dst,
+                           float z, uint fz, uint s)
+{
+    float k = sstep(0.0f, 0.35f, burnHeat(x, y, cover, sc, z, s));
+    uint zi = (uint)(z + 1000.0f);
+    float ang = 6.2831853f * ((float)(zi % 1000u) * 0.37f + 0.25f * hash01(zi, s, 71u));
+    float ca = _cosf(ang), sa = _sinf(ang), ext = 0.5f * (_fabs(ca) * aspect + _fabs(sa));
+    float band = 0.5f + 0.5f * ((x - 0.5f * aspect) * ca + (y - 0.5f) * sa) / ext;
+    float cl = fbm(x / (sc * 1.6f), y / (sc * 1.6f), z, 3, s + 200u);
+    float t = 0.05f + 0.95f * _saturatef(0.8f * band + 0.95f * (cl - 0.5f) + 0.15f);
+    float3 c = ramp(pal, t, age);
+    float keep = lerp1(1.0f, show, k);
+    float gr = 1.0f + grain * 0.22f * (hash01((uint)(px), (uint)(py), fz * 3u + s) - 0.5f) * k;
+    float d = dust(px, py, ph, dst * 100.0f, fz + s) * k;
+    float rr = (r * keep + c.x * k) * gr, gg = (g * keep + c.y * k) * gr, bb = (b * keep + c.z * k) * gr;
+    if (d < 0.0f) { rr *= 0.15f; gg *= 0.12f; bb *= 0.12f; }
+    if (d > 0.0f) { rr = rr + 0.6f; gg = gg + 0.55f; bb = bb + 0.45f; }
+    return make_float4(rr, gg, bb, k);
+}
+
+__DEVICE__ float3 hueL(float h)
+{
+    float k = _fmod(h / 60.0f + 600.0f, 6.0f);
+    return make_float3(toLin(_saturatef(_fabs(k - 3.0f) - 1.0f)), toLin(_saturatef(2.0f - _fabs(k - 2.0f))), toLin(_saturatef(2.0f - _fabs(k - 4.0f))));
+}
+
+__DEVICE__ float2 segPart(float x, float y, float ax, float ay, float bx, float by, float t0, float t1)
+{
+    float dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy + 1e-10f;
+    float t = _fminf(_fmaxf(((x - ax) * dx + (y - ay) * dy) / L2, t0), t1);
+    float ex = x - (ax + dx * t), ey = y - (ay + dy * t);
+    return make_float2(_sqrtf(ex * ex + ey * ey), t);
+}
+
+__DEVICE__ float2 arcDist(float x, float y, float ax, float ay, float bx, float by, float chaos, float z, uint s, float tlo, float thi, float far)
+{
+    float dx = bx - ax, dy = by - ay, L = _sqrtf(dx * dx + dy * dy) + 1e-5f;
+    float ux = dx / L, uy = dy / L;
+    float t = ((x - ax) * ux + (y - ay) * uy) / L;
+    float perp = (x - ax) * -uy + (y - ay) * ux;
+    float amp0 = 0.16f * chaos * L;
+    float tc = _fminf(_fmaxf(t, tlo), thi);
+    float over = (t - tc) * L;
+    if (_fabs(perp) > 2.0f * amp0 + far || _fabs(over) > far) return make_float2(1e3f, tc);
+    float pin = _sinf(3.1415927f * _saturatef(tc));
+    float off = 0.0f, amp = amp0, f = 3.0f;
+    for (int o = 0; o < 5; o++) {
+        off += amp * (vnoise3(tc * f + 37.0f * (float)(o) + 1000.0f, z + 1000.0f, 0.0f, s + (uint)(o)) - 0.5f);
+        amp *= 0.5f; f *= 2.3f;
+    }
+    float q = perp - off * pin;
+    return make_float2(_sqrtf(q * q + over * over), tc);
+}
+
+__DEVICE__ float petal(float u, float v, float a, float len, float wid)
+{
+    float ca = _cosf(a), sa = _sinf(a);
+    float pa = u * ca + v * sa, pb = -u * sa + v * ca;
+    if (pa <= 0.0f || pa >= len) return 0.0f;
+    float hw = wid * len * _powf(_sinf(3.1415927f * pa / len), 0.7f) * (1.0f - 0.35f * pa / len) + 1e-4f;
+    float e = _saturatef(1.0f - _fabs(pb) / hw);
+    return e * e * (1.5f - 0.5f * e);
+}
+
+__DEVICE__ float3 fireCol(float T)
+{
+    float r = 1.0f, g = lerp1(0.22f, 0.55f, sstep(0.0f, 0.5f, T)), b = lerp1(0.03f, 0.14f, sstep(0.2f, 0.6f, T));
+    float y = sstep(0.5f, 0.85f, T);
+    g = lerp1(g, 0.85f, y); b = lerp1(b, 0.45f, y);
+    float w = sstep(0.8f, 1.0f, T);
+    return make_float3(r, lerp1(g, 0.96f, w), lerp1(b, 0.86f, w));
+}
+
+__DEVICE__ float3 dvMain(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE2D__ p_TexR, __TEXTURE2D__ p_TexG, __TEXTURE2D__ p_TexB, int dvFrame, float dvProgress, float lzAmount, float lzMode, float lzX0, float lzY0, float lzX1, float lzY1, float lzWidth, float lzGlow, float lzHaze, float lzHue, float lzFlick, float lzLength, float lzRate, float lzChaos, float lzBranch, float lzCount, float lzAngle, float lzSpread, float lzSize, float lzEvery, float lzLife, float lzPoints, float lzSeed)
+{
+    float3 c0 = make_float3(dvTex2D(p_TexR, p_X, p_Y), dvTex2D(p_TexG, p_X, p_Y), dvTex2D(p_TexB, p_X, p_Y));
+    if (lzAmount <= 0.0f) return c0;
+    int m = (int)(lzMode + 0.5f);
+    float hh = (float)(p_Height), aspect = (float)(p_Width) / hh;
+    float x = ((float)(p_X) + 0.5f) / hh, y = ((float)(p_Y) + 0.5f) / hh;
+    float ax = lzX0 / 100.0f * aspect, ay = lzY0 / 100.0f, bx = lzX1 / 100.0f * aspect, by = lzY1 / 100.0f;
+    float r = toLin(_saturatef(c0.x)), g = toLin(_saturatef(c0.y)), b = toLin(_saturatef(c0.z));
+    int fr = dvFrame;
+    float t = (float)(fr) / 24.0f;
+    uint sd = (uint)(lzSeed) * 613u + 7u;
+    float k = lzAmount / 100.0f;
+    float3 hc = hueL(lzHue);
+    float w = 0.0005f + 0.0035f * lzWidth / 100.0f;
+    float fl = 1.0f - 0.4f * lzFlick / 100.0f * hash01((uint)(fr) + 9u, sd, 2u);
+    float esz = 0.4f + lzSize / 50.0f;
+    float ar = 0.0f, ag = 0.0f, ab = 0.0f, mr = 1.0f, mg = 1.0f, mb = 1.0f;
+    if (m == 0) {
+        float t0 = 0.0f, t1 = 1.0f, tail = 1.0f;
+        int bolt = lzLength < 100.0f && lzRate > 0.0f ? 1 : 0;
+        if (bolt == 1) {
+            float ln = lzLength / 100.0f, ph = t * lzRate - _floorf(t * lzRate);
+            float head = ph * (1.0f + ln);
+            t0 = _fmaxf(head - ln, 0.0f); t1 = _fminf(head, 1.0f);
+        }
+        float2 sp = segPart(x, y, ax, ay, bx, by, t0, t1);
+        float d = sp.x;
+        float dx = bx - ax, dy = by - ay, L = _sqrtf(dx * dx + dy * dy) + 1e-5f;
+        float along = ((x - ax) * dx + (y - ay) * dy) / L, perp = ((x - ax) * -dy + (y - ay) * dx) / L;
+        if (bolt == 1) tail = 0.25f + 0.75f * sstep(t0, t1 + 1e-4f, sp.y) * sstep(-0.001f, 0.002f, t1 - t0);
+        float sh = 1.0f + 0.35f * lzFlick / 100.0f * (vnoise3(along * 40.0f + 1000.0f, t * 9.0f + 1000.0f, 0.0f, sd + 3u) - 0.5f);
+        float ww = w * sh;
+        float core = _expf(-(d / ww) * (d / ww));
+        float mid = _expf(-(d / (ww * 3.0f)) * (d / (ww * 3.0f)));
+        float glow = _expf(-d / (w * (3.0f + 10.0f * lzGlow / 100.0f)));
+        float hz = lzHaze / 100.0f;
+        float smoke = fbm(along * 4.0f - t * 0.6f, perp * 40.0f, t * 0.35f, 3, sd + 11u);
+        float vis = lerp1(1.0f, 0.35f + 1.3f * sstep(0.3f, 0.75f, smoke), hz);
+        float sc = hz * 0.35f * _expf(-d / (w * 5.0f)) * vis;
+        float kk = k * fl * tail * lerp1(1.0f, vis, 0.6f);
+        float cw = 2.4f * core, gw2 = 0.8f * mid + 0.22f * glow + sc;
+        ar += kk * (cw * lerp1(1.0f, hc.x, 0.25f) + gw2 * hc.x);
+        ag += kk * (cw * lerp1(1.0f, hc.y, 0.25f) + gw2 * hc.y);
+        ab += kk * (cw * lerp1(1.0f, hc.z, 0.25f) + gw2 * hc.z);
+        float dA = _sqrtf((x - ax) * (x - ax) + (y - ay) * (y - ay)), dB = _sqrtf((x - bx) * (x - bx) + (y - by) * (y - by));
+        float onA = bolt == 1 ? sstep(0.0f, 0.02f, 0.06f - t0) : 1.0f, onB = bolt == 1 ? sstep(0.95f, 1.0f, t1) : 1.0f;
+        float eA = onA * (1.2f * _expf(-dA / (w * 3.0f * esz)) + 0.30f * _expf(-dA / (w * 12.0f * esz)));
+        float eB = onB * (1.6f * _expf(-dB / (w * 4.0f * esz)) + 0.45f * _expf(-dB / (w * 18.0f * esz)));
+        ar += k * fl * (eA + eB) * lerp1(1.0f, hc.x, 0.5f); ag += k * fl * (eA + eB) * lerp1(1.0f, hc.y, 0.5f); ab += k * fl * (eA + eB) * lerp1(1.0f, hc.z, 0.5f);
+        float lit = 1.6f * k * fl * onB * _expf(-(dB / (0.04f * esz)) * (dB / (0.04f * esz)));
+        mr += lit * hc.x; mg += lit * hc.y; mb += lit * hc.z;
+    } else if (m <= 2) {
+        float strike = lzRate > 0.0f ? _floorf(t * lzRate) : 0.0f;
+        float since = lzRate > 0.0f ? t * lzRate - strike : 0.0f;
+        float flick = lzRate > 0.0f ? (0.55f + 0.45f * _expf(-4.0f * since)) * fl : fl;
+        float chaos = lzChaos / 100.0f;
+        float far = w * (6.0f + 16.0f * lzGlow / 100.0f) * 9.0f;
+        float d = 1e3f, dt = 1e3f;
+        int nb = (int)(lzBranch + 0.5f);
+        uint zs = (uint)(strike) + sd;
+        if (m == 1) {
+            float fs = lzRate > 0.0f ? since * 24.0f / lzRate : 9.0f;
+            float reach = _saturatef(0.45f + 0.55f * fs);
+            float2 a0 = arcDist(x, y, ax, ay, bx, by, chaos, strike * 3.1f, 11u + sd, 0.0f, reach, far);
+            d = a0.x; dt = d;
+            for (int j = 0; j < 4; j++) {
+                if (j >= nb) break;
+                float tb = 0.2f + 0.55f * hash01(zs + 100u, (uint)(j), 3u);
+                if (tb > reach) continue;
+                float an = (hash01(zs + 100u, (uint)(j), 4u) - 0.5f) * 1.6f;
+                float px = ax + (bx - ax) * tb, py = ay + (by - ay) * tb;
+                float dxm = bx - ax, dym = by - ay, ca = _cosf(an), sa = _sinf(an);
+                float ex = px + 0.4f * (dxm * ca - dym * sa) * (1.0f - tb), ey = py + 0.4f * (dxm * sa + dym * ca) * (1.0f - tb);
+                float2 ab2 = arcDist(x, y, px, py, ex, ey, chaos * 1.2f, strike * 3.1f + (float)(j) * 7.0f, 40u + (uint)(j) * 5u + sd, 0.0f, 1.0f, far);
+                d = _fminf(d, ab2.x * (1.5f + 1.5f * ab2.y));
+            }
+            float dA = _sqrtf((x - ax) * (x - ax) + (y - ay) * (y - ay)), dB = _sqrtf((x - bx) * (x - bx) + (y - by) * (y - by));
+            float e = (1.4f * _expf(-dA / (w * 4.0f * esz)) + sstep(0.9f, 1.0f, reach) * 1.8f * _expf(-dB / (w * 5.0f * esz))) * flick * k;
+            ar += e; ag += e; ab += e;
+        } else {
+            float R = 0.08f + 0.0062f * lzSize;
+            int nc = (int)(lzCount + 0.5f);
+            for (int j = 0; j < 8; j++) {
+                if (j >= nc) break;
+                float an = (lzAngle + (hash01(zs + 300u, (uint)(j), 5u) - 0.5f) * lzSpread) * 0.0174533f;
+                float ln = R * (0.45f + 0.55f * hash01(zs + 300u, (uint)(j), 6u));
+                float ex = ax + ln * _cosf(an), ey = ay + ln * _sinf(an);
+                float2 a1 = arcDist(x, y, ax, ay, ex, ey, chaos * 1.15f, strike * 3.1f + (float)(j) * 5.3f, 60u + (uint)(j) * 3u + sd, 0.0f, 1.0f, far);
+                d = _fminf(d, a1.x * (1.0f + 1.5f * a1.y) + 1.3f * w * a1.y * a1.y);
+                dt = _fminf(dt, a1.x);
+                if (nb > 0) {
+                    float tb = 0.3f + 0.4f * hash01(zs + 300u, (uint)(j), 7u);
+                    float bn = an + (hash01(zs + 300u, (uint)(j), 8u) - 0.5f) * 1.4f;
+                    float px = ax + (ex - ax) * tb, py = ay + (ey - ay) * tb;
+                    float qx = px + 0.5f * ln * (1.0f - tb) * _cosf(bn), qy = py + 0.5f * ln * (1.0f - tb) * _sinf(bn);
+                    float2 a2 = arcDist(x, y, px, py, qx, qy, chaos * 1.3f, strike * 3.1f + (float)(j) * 9.1f, 90u + (uint)(j) * 3u + sd, 0.0f, 1.0f, far);
+                    d = _fminf(d, a2.x * (1.6f + 1.5f * a2.y) + w * (0.5f + 1.3f * a2.y * a2.y));
+                }
+            }
+            float dA = _sqrtf((x - ax) * (x - ax) + (y - ay) * (y - ay));
+            float e = 2.0f * _expf(-dA / (w * 5.0f * esz)) * flick * k;
+            ar += e; ag += e; ab += e;
+            float eg = 0.15f * _expf(-dA / (0.018f * esz)) * flick * k;
+            ar += eg * hc.x; ag += eg * hc.y; ab += eg * hc.z;
+        }
+        float core = _expf(-(d / w) * (d / w));
+        float glow = _expf(-d / (w * (4.0f + 14.0f * lzGlow / 100.0f)));
+        float kk = k * flick;
+        ar += kk * (2.5f * core + 0.45f * glow * hc.x); ag += kk * (2.5f * core + 0.45f * glow * hc.y); ab += kk * (2.5f * core + 0.45f * glow * hc.z);
+        float lit = 0.4f * kk * _expf(-dt / 0.06f);
+        mr += lit * hc.x; mg += lit * hc.y; mb += lit * hc.z;
+    } else {
+        int per = (int)(lzEvery + 0.5f), life = (int)(lzLife + 0.5f);
+        int shot = 0, age = 0;
+        if (per > 0) { shot = fr / per; age = fr - shot * per; }
+        if (age < life) {
+            float S = 0.03f + 0.0012f * lzSize;
+            uint ss = (uint)(shot) * 7919u + sd;
+            float fa = (float)(age);
+            float I = _powf(0.34f, fa);
+            float grow = 1.0f + 0.25f * fa;
+            float an = (lzAngle + 8.0f * (hash01(ss, 1u, 2u) - 0.5f)) * 0.0174533f;
+            float ca = _cosf(an), sa = _sinf(an);
+            float px = x - ax, py = y - ay;
+            float u0 = (px * ca + py * sa) / S, v0 = (-px * sa + py * ca) / S;
+            float rr = _sqrtf(u0 * u0 + v0 * v0);
+            float nz = 5.0f / grow;
+            float u = (u0 + 0.12f * (vnoise3(u0 * nz + 1000.0f, v0 * nz + 1000.0f, fa * 0.9f, ss + 3u) - 0.5f)) / grow;
+            float v = (v0 + 0.12f * (vnoise3(u0 * nz + 1200.0f, v0 * nz + 1000.0f, fa * 0.9f, ss + 4u) - 0.5f)) / grow;
+            float lf = 1.0f + 0.6f * hash01(ss, 3u, 4u);
+            float D = petal(u, v, 0.0f, lf, 0.24f) * (0.45f + 0.55f * _powf(_saturatef(1.0f - u / lf), 0.6f));
+            int np = (int)(lzPoints + 0.5f);
+            for (int j = 0; j < 6; j++) {
+                if (j >= np) break;
+                float pa = (-1.0f + 2.0f * ((float)(j) + 0.5f) / (float)(np)) * 1.75f + 0.25f * (hash01(ss, (uint)(j), 5u) - 0.5f);
+                if (np == 1) pa = 1.57f * (hash01(ss, 9u, 5u) < 0.5f ? -1.0f : 1.0f);
+                float pl = (0.28f + 0.35f * hash01(ss, (uint)(j), 6u)) * (1.0f - 0.35f * _fabs(pa) / 1.75f);
+                D = _fmaxf(D, 0.80f * petal(u, v, pa, pl, 0.27f));
+            }
+            D *= 0.6f + 0.7f * fbm(u * 3.5f, v * 3.5f, fa * 0.8f + (float)(shot % 97) * 3.0f, 3, ss + 8u);
+            float rc = _sqrtf(u * u + v * v);
+            D = _fmaxf(D, _expf(-(rc / 0.15f) * (rc / 0.15f)));
+            float T = _saturatef(1.1f * _sqrtf(D) * (1.0f - 0.30f * fa));
+            float3 fc = fireCol(T);
+            float E = I * (1.1f * D + 1.6f * T * T * T * D);
+            float gl = 0.0f;
+            for (int j = 0; j < 6; j++) {
+                float gd = (1.1f + 1.6f * hash01(ss, (uint)(j), 21u)) * lf * grow;
+                float ga = 0.45f * (hash01(ss, (uint)(j), 22u) - 0.5f);
+                float gx = gd * _cosf(ga), gy = gd * _sinf(ga);
+                float2 gs = segPart(u0, v0, gx - 0.12f * _cosf(ga), gy - 0.12f * _sinf(ga), gx, gy, 0.0f, 1.0f);
+                float gw = 1.3f / hh / S;
+                gl += _expf(-(gs.x / gw) * (gs.x / gw)) * (0.4f + 0.6f * hash01(ss, (uint)(j), 23u));
+            }
+            gl *= I * (age < 2 ? 1.0f : 0.0f) * 1.4f;
+            float halo = 0.07f * I * _expf(-rr / (0.7f * grow));
+            ar += k * (E * fc.x + gl + halo); ag += k * (E * fc.y + gl * 0.75f + halo * 0.55f); ab += k * (E * fc.z + gl * 0.4f + halo * 0.18f);
+            float lit = k * I * (1.4f / (1.0f + rr * rr * 0.35f) * _expf(-rr / 6.0f) + 0.04f);
+            mr += lit; mg += lit * 0.72f; mb += lit * 0.42f;
+        }
+    }
+    float rr2 = r * mr + ar, gg2 = g * mg + ag, bb2 = b * mb + ab;
+    float kw = _saturatef(ar + ag + ab + 0.5f * (mr + mg + mb - 3.0f));
+    if (kw <= 0.0f) return c0;
+    return lightOut(rr2, gg2, bb2, kw);
+}
+
+// fusegen: the kernel entry (Fusion's rows run bottom up; py is the DCTL's top-down row)
+__KERNEL__ void DevelopLaserK663f4ffa(__CONSTANTREF__ DevelopLaserP663f4ffa *params, __TEXTURE2D__ p_TexR, __TEXTURE2D__ p_TexG, __TEXTURE2D__ p_TexB, __TEXTURE2D__ dvSrc, __TEXTURE2D_WRITE__ dvDst)
+{
+    DEFINE_KERNEL_ITERATORS_XY(x, y)
+    if (x < params->dvSize[0] && y < params->dvSize[1])
+    {
+        int py = params->dvFlipY != 0 ? params->dvSize[1] - 1 - y : y;
+        float3 c = dvMain(params->dvSize[0], params->dvSize[1], x, py, p_TexR, p_TexG, p_TexB, params->dvFrame, params->dvProgress, params->lzAmount, params->lzMode, params->lzX0, params->lzY0, params->lzX1, params->lzY1, params->lzWidth, params->lzGlow, params->lzHaze, params->lzHue, params->lzFlick, params->lzLength, params->lzRate, params->lzChaos, params->lzBranch, params->lzCount, params->lzAngle, params->lzSpread, params->lzSize, params->lzEvery, params->lzLife, params->lzPoints, params->lzSeed);
+        float4 s = _tex2DVec4(dvSrc, x, y);
+        _tex2DVec4Write(dvDst, x, y, to_float4(c.x, c.y, c.z, s.w));
+    }
+}
+]]
+
+-- the plain source first; the compatibility source only if the plain one does not build
+DvSources = { DvMath .. DvMapping .. DvKernelText, DvCompat .. DvMath .. DvMapping .. DvKernelText }
+DvWorking = nil
+
+-- the last status of each tool, so a change is reported once
+DvLast = {}
+
+-- the compute node's error log (DVIPComputeNode:GetErrorLog, a name in fusionsystem.dll), or a note that it has none
+function DvNodeLog(node)
+	local log = nil
+	if node then
+		pcall(function()
+			log = node:GetErrorLog()
+		end)
+	end
+	if log == nil or log == "" then
+		return "(the node gave no error log; see the Fusion console)"
+	end
+	return tostring(log)
+end
+
+-- report a status: the console, the tool's data and the log file, each once per change
+function DvNote(tool, failed, msg)
+	local key = DvName
+	pcall(function()
+		key = tool.Name
+	end)
+	key = tostring(key)
+	local text = msg
+	if failed then
+		text = "FAILED: " .. msg
+	end
+	if DvLast[key] == text then
+		return
+	end
+	DvLast[key] = text
+	print(DvName .. " [" .. key .. "] " .. text)
+	pcall(function()
+		tool:SetData("DevelopFuse.Status", text)
+	end)
+	pcall(function()
+		local dir = os.getenv("TEMP") or os.getenv("TMP") or "."
+		local f = io.open(dir .. "/DevelopFuse.log", "a")
+		if f then
+			local line = (text:gsub("[\r\n]+", " | "))
+			f:write(os.date("%Y-%m-%d %H:%M:%S") .. "\t" .. key .. "\t" .. DvName .. "\t" .. line .. "\n")
+			f:close()
+		end
+	end)
+end
+
+-- a Lua error's message with its traceback when the debug library is there
+function DvTrace(e)
+	if debug and debug.traceback then
+		return debug.traceback(tostring(e), 2)
+	end
+	return tostring(e)
+end
+
+-- the visible error: a solid magenta frame the size of ref (nil when there is no picture to size it by)
+function DvFailImage(ref)
+	local bad = nil
+	if ref then
+		pcall(function()
+			bad = Image({IMG_Like = ref})
+			bad:Fill(Pixel({R = 1.0, G = 0.0, B = 1.0, A = 1.0}))
+		end)
+	end
+	return bad
+end
+
+function Create()
+	InLzAmount = self:AddInput("Laser", "lzAmount", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 100.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InLzMode = self:AddInput("Mode", "lzMode", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 0.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 3.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 3.0,
+		INPS_StatusText = "0 Laser Beam, 1 Zap To, 2 Zap From, 3 Muzzle Flash",
+		})
+	InLzX0 = self:AddInput("Start X", "lzX0", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 12.0,
+		INP_MinScale = -20.0,
+		INP_MaxScale = 120.0,
+		INP_MinAllowed = -20.0,
+		INP_MaxAllowed = 120.0,
+		INPS_StatusText = "Percent of the frame's width; Y is percent of its height. The muzzle in Muzzle Flash",
+		})
+	InLzY0 = self:AddInput("Start Y", "lzY0", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 70.0,
+		INP_MinScale = -20.0,
+		INP_MaxScale = 120.0,
+		INP_MinAllowed = -20.0,
+		INP_MaxAllowed = 120.0,
+		})
+	InLzX1 = self:AddInput("End X", "lzX1", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 86.0,
+		INP_MinScale = -20.0,
+		INP_MaxScale = 120.0,
+		INP_MinAllowed = -20.0,
+		INP_MaxAllowed = 120.0,
+		})
+	InLzY1 = self:AddInput("End Y", "lzY1", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 34.0,
+		INP_MinScale = -20.0,
+		INP_MaxScale = 120.0,
+		INP_MinAllowed = -20.0,
+		INP_MaxAllowed = 120.0,
+		})
+	InLzWidth = self:AddInput("Width", "lzWidth", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 30.0,
+		INP_MinScale = 1.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 1.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InLzGlow = self:AddInput("Glow", "lzGlow", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 50.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InLzHaze = self:AddInput("Haze", "lzHaze", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 40.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InLzHue = self:AddInput("Hue", "lzHue", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 130.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 360.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 360.0,
+		})
+	InLzFlick = self:AddInput("Flicker", "lzFlick", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 30.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InLzLength = self:AddInput("Length", "lzLength", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 100.0,
+		INP_MinScale = 5.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 5.0,
+		INP_MaxAllowed = 100.0,
+		INPS_StatusText = "Laser Beam: 100 a steady beam, under it a bolt of that share travelling Rate times a second",
+		})
+	InLzRate = self:AddInput("Rate", "lzRate", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 6.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 24.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 24.0,
+		INPS_StatusText = "Bolts or strikes a second; 0 holds one still",
+		})
+	InLzChaos = self:AddInput("Chaos", "lzChaos", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 45.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InLzBranch = self:AddInput("Branches", "lzBranch", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 2.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 4.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 4.0,
+		})
+	InLzCount = self:AddInput("Count", "lzCount", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 5.0,
+		INP_MinScale = 1.0,
+		INP_MaxScale = 8.0,
+		INP_MinAllowed = 1.0,
+		INP_MaxAllowed = 8.0,
+		})
+	InLzAngle = self:AddInput("Angle", "lzAngle", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 0.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 360.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 360.0,
+		INPS_StatusText = "Muzzle Flash: where it points; Zap From: the middle of its spread. 0 right, 90 down",
+		})
+	InLzSpread = self:AddInput("Spread", "lzSpread", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 360.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 360.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 360.0,
+		})
+	InLzSize = self:AddInput("Size", "lzSize", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 50.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		INPS_StatusText = "Muzzle Flash: the flame's size; Zap From: the arcs' reach; Laser and Zap To: the end glows",
+		})
+	InLzEvery = self:AddInput("Interval", "lzEvery", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 4.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 48.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 48.0,
+		INPS_StatusText = "Muzzle Flash: frames from one shot to the next; 0 holds the first frame",
+		})
+	InLzLife = self:AddInput("Life", "lzLife", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 3.0,
+		INP_MinScale = 1.0,
+		INP_MaxScale = 4.0,
+		INP_MinAllowed = 1.0,
+		INP_MaxAllowed = 4.0,
+		INPS_StatusText = "Muzzle Flash: frames each shot lasts",
+		})
+	InLzPoints = self:AddInput("Points", "lzPoints", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 4.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 6.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 6.0,
+		INPS_StatusText = "Muzzle Flash: the side petals of the star",
+		})
+	InLzSeed = self:AddInput("Seed", "lzSeed", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 0.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InFrameOffset = self:AddInput("Frame Offset", "FrameOffset", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Integer = true,
+		INP_Default = 0,
+		INP_MinScale = 0,
+		INP_MaxScale = 1000,
+		INPS_StatusText = "Added to the comp frame to make the DCTL's frame value (Resolve's TIMELINE_FRAME_INDEX)",
+		})
+	InHoldFrame = self:AddInput("Hold Frame", "HoldFrame", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "CheckboxControl",
+		INP_Integer = true,
+		INP_Default = 0,
+		INPS_StatusText = "The frame value is Frame Offset alone, so a moving effect holds still",
+		})
+	InFlipY = self:AddInput("Rows Top Down", "FlipY", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "CheckboxControl",
+		INP_Integer = true,
+		INP_Default = 1,
+		IC_Visible = false,
+		})
+	InInput = self:AddInput("Input", "Input", {
+		LINKID_DataType = "Image",
+		LINK_Main = 1,
+		})
+	OutImage = self:AddOutput("Output", "Output", {
+		LINKID_DataType = "Image",
+		LINK_Main = 1,
+		})
+end
+
+-- one channel of img as its own texture, rows top-down (DvSplitSource); returns the plane, or nil and why
+function DvPlane(req, img, ch, flip)
+	local plane = Image({IMG_Like = img})
+	local node = DVIPComputeNode(req, DvSplitName, DvSplitSource, DvSplitParamsName, DvSplitParams)
+	if not node then
+		return nil, "the split kernel's compute node was not created (DVIPComputeNode gave nil)"
+	end
+	local p = node:GetParamBlock(DvSplitParams)
+	p.ch = ch
+	p.flipY = flip
+	p.size[0] = img.DataWindow:Width()
+	p.size[1] = img.DataWindow:Height()
+	node:SetParamBlock(p)
+	node:AddInput("src", img)
+	node:AddOutput("dst", plane)
+	if node:RunSession(req) then
+		return plane
+	end
+	return nil, "the split kernel did not run: " .. DvNodeLog(node)
+end
+
+-- the kernel over every pixel with source k; returns true when it ran, or false and why
+function DvRun(req, k, src, inc, planes, out, frame, flip, progress)
+	local node = DVIPComputeNode(req, DvKernelName, DvSources[k], DvParamsName, DvParams)
+	if not node then
+		return false, "source " .. k .. ": the compute node was not created (DVIPComputeNode gave nil)"
+	end
+	local p = node:GetParamBlock(DvParams)
+	p.lzAmount = InLzAmount:GetValue(req).Value
+	p.lzMode = InLzMode:GetValue(req).Value
+	p.lzX0 = InLzX0:GetValue(req).Value
+	p.lzY0 = InLzY0:GetValue(req).Value
+	p.lzX1 = InLzX1:GetValue(req).Value
+	p.lzY1 = InLzY1:GetValue(req).Value
+	p.lzWidth = InLzWidth:GetValue(req).Value
+	p.lzGlow = InLzGlow:GetValue(req).Value
+	p.lzHaze = InLzHaze:GetValue(req).Value
+	p.lzHue = InLzHue:GetValue(req).Value
+	p.lzFlick = InLzFlick:GetValue(req).Value
+	p.lzLength = InLzLength:GetValue(req).Value
+	p.lzRate = InLzRate:GetValue(req).Value
+	p.lzChaos = InLzChaos:GetValue(req).Value
+	p.lzBranch = InLzBranch:GetValue(req).Value
+	p.lzCount = InLzCount:GetValue(req).Value
+	p.lzAngle = InLzAngle:GetValue(req).Value
+	p.lzSpread = InLzSpread:GetValue(req).Value
+	p.lzSize = InLzSize:GetValue(req).Value
+	p.lzEvery = InLzEvery:GetValue(req).Value
+	p.lzLife = InLzLife:GetValue(req).Value
+	p.lzPoints = InLzPoints:GetValue(req).Value
+	p.lzSeed = InLzSeed:GetValue(req).Value
+	p.dvProgress = progress
+	p.dvFrame = frame
+	p.dvFlipY = flip
+	p.dvSize[0] = src.DataWindow:Width()
+	p.dvSize[1] = src.DataWindow:Height()
+	node:SetParamBlock(p)
+	node:AddInput("p_TexR", planes.p_TexR)
+	node:AddInput("p_TexG", planes.p_TexG)
+	node:AddInput("p_TexB", planes.p_TexB)
+	node:AddInput("dvSrc", src)
+	node:AddOutput("dvDst", out)
+	if node:RunSession(req) then
+		return true
+	end
+	return false, "source " .. k .. ": RunSession failed: " .. DvNodeLog(node)
+end
+
+function DvProcess(req)
+	local src = InInput:GetValue(req)
+	if not src then
+		return nil, "no input image", true, nil
+	end
+	if req:IsPreCalc() then
+		return Image({IMG_Like = src, IMG_NoData = true}), nil, false, src
+	end
+	local inc = nil
+	local progress = 0.0
+	local out = Image({IMG_Like = src})
+	local flip = math.floor(InFlipY:GetValue(req).Value + 0.5)
+	local frame = math.floor(InFrameOffset:GetValue(req).Value + 0.5)
+	if InHoldFrame:GetValue(req).Value < 0.5 then
+		frame = frame + math.floor(req.Time + 0.5)
+	end
+	local planes = {}
+	local why = nil
+	planes.p_TexR, why = DvPlane(req, src, 0, flip)
+	if not planes.p_TexR then
+		return nil, "p_TexR: " .. tostring(why), true, src
+	end
+	planes.p_TexG, why = DvPlane(req, src, 1, flip)
+	if not planes.p_TexG then
+		return nil, "p_TexG: " .. tostring(why), true, src
+	end
+	planes.p_TexB, why = DvPlane(req, src, 2, flip)
+	if not planes.p_TexB then
+		return nil, "p_TexB: " .. tostring(why), true, src
+	end
+	local order = {}
+	if DvWorking then
+		order[1] = DvWorking
+	end
+	for k = 1, #DvSources do
+		if k ~= DvWorking then
+			order[#order + 1] = k
+		end
+	end
+	local errs = {}
+	for i = 1, #order do
+		local ok, err = DvRun(req, order[i], src, inc, planes, out, frame, flip, progress)
+		if ok then
+			DvWorking = order[i]
+			return out, "ok, the kernel runs from source " .. order[i], false, src
+		end
+		errs[#errs + 1] = tostring(err)
+	end
+	return nil, "the kernel ran from no source: " .. table.concat(errs, " || "), true, src
+end
+
+-- every failure is reported and shows as magenta; the input never passes through quietly
+function Process(req)
+	local res, msg, failed, ref = nil, nil, true, nil
+	local called, err = xpcall(function()
+		res, msg, failed, ref = DvProcess(req)
+	end, DvTrace)
+	if not called then
+		res, msg, failed = nil, "Lua error in Process: " .. tostring(err), true
+		if not ref then
+			pcall(function()
+				ref = InInput:GetValue(req)
+			end)
+		end
+	end
+	if msg then
+		DvNote(self, failed, msg)
+	end
+	if failed then
+		res = DvFailImage(ref)
+	end
+	OutImage:Set(req, res)
+end

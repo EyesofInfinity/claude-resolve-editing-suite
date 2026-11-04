@@ -1,0 +1,226 @@
+// Develop Grain Match: gives a clip the grain of a reference clip, so footage from different cameras cuts as
+// one. A transform DCTL; run it as a ResolveFX DCTL plugin node so TIMELINE_FRAME_INDEX is live and the grain moves.
+// Rec.709 gamma 2.4 display values in and out. MIT License.
+//
+// The numbers come from effects/grainmatch/grainmatch.py (it reads the reference and this clip and writes them, and a
+// .drx grade that carries them). Strengths are standard deviations in 8-bit codes (display value x 255) of the grain
+// that changes from frame to frame, in Y' (luma) and in colour (Blue is Cb, Red is Cr, BT.709), at three brightness
+// bands whose
+// tents are centred at display luma 0.15, 0.45 and 0.80; between centres the tents mix the band variances.
+// This Clip is the grain the clip already has. Only the difference is added: per pixel the added variance is the
+// reference's less the clip's, and nothing where the clip is already as grainy. Grain adds as independent noise
+// does, in variance, so the total then reads as the reference's.
+// Size is the grain's Gaussian sigma in px at 1080 lines (scaled with the frame height). The added grain's size is
+// set so the total's lag-1 correlation is the reference's. The colour correlations of the added grain are set so
+// the total's covariance is the reference's (this clip's own grain counted as uncorrelated).
+// The field: white values on a lattice of spacing max(1, size) summed with Gaussian weights (sigma = size) and
+// divided by the root of the summed squared weights, so every pixel has unit variance. Averaged over the lattice its
+// correlation is that of white noise blurred by the Gaussian, the model the analyzer reads sizes with.
+// Hold mixes a still field (fixed on the screen) into the moving one: 0 is new grain every frame.
+// Pure black and pure white take no grain (a taper over 0.03 at each end), so bars and cards stay clean.
+
+DEFINE_UI_PARAMS(gmRefYS,  Ref Grain Shadows,       DCTLUI_SLIDER_FLOAT, 3.0, 0.0, 30.0, 0.01)
+DEFINE_UI_PARAMS(gmRefYM,  Ref Grain Mids,          DCTLUI_SLIDER_FLOAT, 2.5, 0.0, 30.0, 0.01)
+DEFINE_UI_PARAMS(gmRefYH,  Ref Grain Highlights,    DCTLUI_SLIDER_FLOAT, 1.8, 0.0, 30.0, 0.01)
+DEFINE_UI_PARAMS(gmRefBS,  Ref Blue Shadows,        DCTLUI_SLIDER_FLOAT, 1.2, 0.0, 30.0, 0.01)
+DEFINE_UI_PARAMS(gmRefBM,  Ref Blue Mids,           DCTLUI_SLIDER_FLOAT, 0.9, 0.0, 30.0, 0.01)
+DEFINE_UI_PARAMS(gmRefBH,  Ref Blue Highlights,     DCTLUI_SLIDER_FLOAT, 0.6, 0.0, 30.0, 0.01)
+DEFINE_UI_PARAMS(gmRefRS,  Ref Red Shadows,         DCTLUI_SLIDER_FLOAT, 1.2, 0.0, 30.0, 0.01)
+DEFINE_UI_PARAMS(gmRefRM,  Ref Red Mids,            DCTLUI_SLIDER_FLOAT, 0.9, 0.0, 30.0, 0.01)
+DEFINE_UI_PARAMS(gmRefRH,  Ref Red Highlights,      DCTLUI_SLIDER_FLOAT, 0.6, 0.0, 30.0, 0.01)
+DEFINE_UI_PARAMS(gmRefSz,  Ref Grain Size,          DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 4.0, 0.01)
+DEFINE_UI_PARAMS(gmRefCSz, Ref Colour Size,         DCTLUI_SLIDER_FLOAT, 1.6, 0.0, 4.0, 0.01)
+DEFINE_UI_PARAMS(gmRefYB,  Ref Luma Blue Link,      DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 0.1)
+DEFINE_UI_PARAMS(gmRefYR,  Ref Luma Red Link,       DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 0.1)
+DEFINE_UI_PARAMS(gmRefBR,  Ref Blue Red Link,       DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 0.1)
+DEFINE_UI_PARAMS(gmHold,   Hold,                    DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gmClYS,   Clip Grain Shadows,      DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 30.0, 0.01)
+DEFINE_UI_PARAMS(gmClYM,   Clip Grain Mids,         DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 30.0, 0.01)
+DEFINE_UI_PARAMS(gmClYH,   Clip Grain Highlights,   DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 30.0, 0.01)
+DEFINE_UI_PARAMS(gmClBS,   Clip Blue Shadows,       DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 30.0, 0.01)
+DEFINE_UI_PARAMS(gmClBM,   Clip Blue Mids,          DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 30.0, 0.01)
+DEFINE_UI_PARAMS(gmClBH,   Clip Blue Highlights,    DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 30.0, 0.01)
+DEFINE_UI_PARAMS(gmClRS,   Clip Red Shadows,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 30.0, 0.01)
+DEFINE_UI_PARAMS(gmClRM,   Clip Red Mids,           DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 30.0, 0.01)
+DEFINE_UI_PARAMS(gmClRH,   Clip Red Highlights,     DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 30.0, 0.01)
+DEFINE_UI_PARAMS(gmClSz,   Clip Grain Size,         DCTLUI_SLIDER_FLOAT, 0.5, 0.0, 4.0, 0.01)
+DEFINE_UI_PARAMS(gmClCSz,  Clip Colour Size,        DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 4.0, 0.01)
+DEFINE_UI_PARAMS(gmAmount, Amount,                  DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 200.0, 1.0)
+DEFINE_UI_PARAMS(gmSeed,   Seed,                    DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gmView,   View Grain,              DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Ref Grain Mids, "The reference's moving luma grain in the mids, in 8-bit codes (grainmatch.py prints it)")
+DEFINE_UI_TOOLTIP(Clip Grain Mids, "This clip's own moving luma grain in the mids; only the difference is added")
+DEFINE_UI_TOOLTIP(Ref Blue Mids, "The reference's colour grain in the blue difference (Cb), 8-bit codes")
+DEFINE_UI_TOOLTIP(Ref Red Mids, "The reference's colour grain in the red difference (Cr), 8-bit codes")
+DEFINE_UI_TOOLTIP(Ref Grain Size, "Gaussian sigma of the grain in px at 1080 lines; 0 is single-pixel grain")
+DEFINE_UI_TOOLTIP(Hold, "Share of the grain's variance that stays still on screen; 0 is new grain every frame")
+DEFINE_UI_TOOLTIP(View Grain, "1 shows only the added grain, over mid grey")
+
+__DEVICE__ float hash01(uint x, uint y, uint z)
+{
+    x = x * 1664525u + 1013904223u; y = y * 1664525u + 1013904223u; z = z * 1664525u + 1013904223u;
+    x += y * z; y += z * x; z += x * y;
+    x ^= x >> 16u; y ^= y >> 16u; z ^= z >> 16u;
+    x += y * z; y += z * x; z += x * y;
+    return (float)(x >> 8u) * (1.0f / 16777216.0f);
+}
+
+__DEVICE__ float latval(uint i, uint j, uint z, int fine)
+{
+    if (fine == 1) return (hash01(i, j, z) + hash01(i, j, z + 1u) + hash01(i, j, z + 2u) - 1.5f) * 2.0f;
+    return (hash01(i, j, z) - 0.5f) * 3.4641016f;
+}
+
+__DEVICE__ float gfield(float x, float y, float s, uint ox, uint z)
+{
+    if (s < 0.25f) {
+        return latval((uint)((int)(_floorf(x))) + ox, (uint)((int)(_floorf(y))) + 7u, z, 1);
+    }
+    float g = _fmaxf(1.0f, s);
+    int R = 3;
+    if (s < 1.0f) R = (int)(_floorf(3.0f * s)) + 1;
+    float u = (x - 0.5f) / g, v = (y - 0.5f) / g;
+    int ic = (int)(_floorf(u + 0.5f)), jc = (int)(_floorf(v + 0.5f));
+    float k = -0.5f * g * g / (s * s);
+    int fine = s < 0.6f ? 1 : 0;
+    float sum = 0.0f, w2 = 0.0f;
+    for (int j = jc - R; j <= jc + R; j++) {
+        float dy = v - (float)(j);
+        float wy = _expf(k * dy * dy);
+        for (int i = ic - R; i <= ic + R; i++) {
+            float dx = u - (float)(i);
+            float w = wy * _expf(k * dx * dx);
+            sum += w * latval((uint)(i + 8192) + ox, (uint)(j + 8192), z, fine);
+            w2 += w * w;
+        }
+    }
+    return sum / _sqrtf(w2 + 1e-20f);
+}
+
+__DEVICE__ float hfield(float x, float y, float s, uint ox, uint zf, uint zs, float h)
+{
+    float f = 0.0f;
+    if (h < 1.0f) f = _sqrtf(1.0f - h) * gfield(x, y, s, ox, zf);
+    if (h > 0.0f) f += _sqrtf(h) * gfield(x, y, s, ox, zs);
+    return f;
+}
+
+__DEVICE__ float rho1(float s)
+{
+    if (s < 0.25f) return 0.0f;
+    if (s >= 1.0f) return _expf(-0.25f / (s * s));
+    float k = -0.5f / (s * s), a = 0.0f, b = 0.0f;
+    for (int i = -3; i <= 3; i++) {
+        float g0 = _expf(k * (float)(i * i)), g1 = _expf(k * (float)((i + 1) * (i + 1)));
+        a += g0 * g1; b += g0 * g0;
+    }
+    return a / b;
+}
+
+__DEVICE__ float sigmaOfRho(float r)
+{
+    if (r <= 0.002f) return 0.0f;
+    if (r >= rho1(1.0f)) return _sqrtf(-0.25f / _logf(_fminf(r, 0.9844f)));
+    float lo = 0.25f, hi = 1.0f;
+    for (int i = 0; i < 10; i++) {
+        float m = 0.5f * (lo + hi);
+        if (rho1(m) < r) lo = m; else hi = m;
+    }
+    return 0.5f * (lo + hi);
+}
+
+__DEVICE__ float addSize(float vr, float sr, float vc, float sc)
+{
+    float va = vr - vc;
+    if (va <= 1e-12f) return sr;
+    float r = (vr * rho1(sr) - vc * rho1(sc)) / va;
+    return _fminf(sigmaOfRho(r), 2.0f * sr);
+}
+
+__DEVICE__ float tentmix(float y, float a, float b, float c)
+{
+    float w0 = _clampf((0.45f - y) / 0.30f, 0.0f, 1.0f);
+    float w2 = _clampf((y - 0.45f) / 0.35f, 0.0f, 1.0f);
+    return w0 * a + (1.0f - w0 - w2) * b + w2 * c;
+}
+
+__DEVICE__ float smooth01(float e0, float e1, float x)
+{
+    float t = _clampf((x - e0) / (e1 - e0), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float r = _tex2D(p_TexR, p_X, p_Y), g = _tex2D(p_TexG, p_X, p_Y), b = _tex2D(p_TexB, p_X, p_Y);
+    if (gmAmount <= 0.0f && gmView < 0.5f) return make_float3(r, g, b);
+    float yl = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+    float yb = gmView > 0.5f ? 0.45f : _saturatef(yl);
+    float q = 1.0f / (255.0f * 255.0f);
+    float rY = tentmix(yb, gmRefYS * gmRefYS, gmRefYM * gmRefYM, gmRefYH * gmRefYH) * q;
+    float cY = tentmix(yb, gmClYS * gmClYS, gmClYM * gmClYM, gmClYH * gmClYH) * q;
+    float rCb = tentmix(yb, gmRefBS * gmRefBS, gmRefBM * gmRefBM, gmRefBH * gmRefBH) * q;
+    float rCr = tentmix(yb, gmRefRS * gmRefRS, gmRefRM * gmRefRM, gmRefRH * gmRefRH) * q;
+    float cCb = tentmix(yb, gmClBS * gmClBS, gmClBM * gmClBM, gmClBH * gmClBH) * q;
+    float cCr = tentmix(yb, gmClRS * gmClRS, gmClRM * gmClRM, gmClRH * gmClRH) * q;
+    float aY = _fmaxf(0.0f, rY - cY);
+    float aCb = _fmaxf(0.0f, rCb - cCb);
+    float aCr = _fmaxf(0.0f, rCr - cCr);
+    float amt = gmAmount / 100.0f;
+    if (gmView > 0.5f) amt = _fmaxf(amt, 1.0f);
+    if (aY + aCb + aCr <= 0.0f) {
+        if (gmView > 0.5f) return make_float3(0.45f, 0.45f, 0.45f);
+        return make_float3(r, g, b);
+    }
+    float qm = 1.0f / (255.0f * 255.0f);
+    float hs = (float)(p_Height) / 1080.0f;
+    float sY = addSize(gmRefYM * gmRefYM * qm, gmRefSz, gmClYM * gmClYM * qm, gmClSz) * hs;
+    float sC = addSize(0.5f * (gmRefBM * gmRefBM + gmRefRM * gmRefRM) * qm, gmRefCSz,
+                       0.5f * (gmClBM * gmClBM + gmClRM * gmClRM) * qm, gmClCSz) * hs;
+    float sdY = _sqrtf(aY) + 1e-12f, sdB = _sqrtf(aCb) + 1e-12f, sdR = _sqrtf(aCr) + 1e-12f;
+    float c12 = gmRefYB / 100.0f * _sqrtf(rY * rCb) / (sdY * sdB);
+    float c13 = gmRefYR / 100.0f * _sqrtf(rY * rCr) / (sdY * sdR);
+    float c23 = gmRefBR / 100.0f * _sqrtf(rCb * rCr) / (sdB * sdR);
+    float zq = 1e-9f;
+    if (aY < zq) { c12 = 0.0f; c13 = 0.0f; }
+    if (aCb < zq) { c12 = 0.0f; c23 = 0.0f; }
+    if (aCr < zq) { c13 = 0.0f; c23 = 0.0f; }
+    float sS = c12 * c12 + c13 * c13 + c23 * c23;
+    if (sS > 1e-8f) {
+        float sP = c12 * c13 * c23;
+        float rs = _sqrtf(sS / 3.0f);
+        float ca = _clampf(sP / (rs * rs * rs), -1.0f, 1.0f);
+        float mMin = 2.0f * rs * _cosf(_acosf(ca) / 3.0f + 2.0943951f);
+        float kk = mMin < -0.96f ? 0.96f / -mMin : 1.0f;
+        c12 *= kk; c13 *= kk; c23 *= kk;
+    }
+    float l22 = _sqrtf(_fmaxf(1e-6f, 1.0f - c12 * c12));
+    float l32 = (c23 - c13 * c12) / l22;
+    float l33 = _sqrtf(_fmaxf(0.0f, 1.0f - c13 * c13 - l32 * l32));
+    uint sd = (uint)(gmSeed);
+    uint zf = ((uint)(TIMELINE_FRAME_INDEX) + sd * 7919u) * 64u;
+    uint zs = 3000017u + sd * 104729u + 2147483648u;
+    float h = gmHold / 100.0f;
+    float x = (float)(p_X) + 0.5f, y = (float)(p_Y) + 0.5f;
+    float u1 = hfield(x, y, sY, 0u, zf, zs, h);
+    float u2 = 0.0f, u3 = 0.0f;
+    if (aCb + aCr > 0.0f) {
+        u2 = hfield(x, y, sC, 100003u, zf + 8u, zs + 8u, h);
+        u3 = hfield(x, y, sC, 200003u, zf + 16u, zs + 16u, h);
+    }
+    float nY = sdY * u1;
+    float nB = sdB * (c12 * u1 + l22 * u2);
+    float nR = sdR * (c13 * u1 + l32 * u2 + l33 * u3);
+    float tp = smooth01(0.0f, 0.03f, yb) * (1.0f - smooth01(0.97f, 1.0f, yb));
+    if (gmView > 0.5f) tp = 1.0f;
+    nY *= amt * tp; nB *= amt * tp; nR *= amt * tp;
+    float dr = nY + 1.5748f * nR;
+    float dg = nY - 0.1873243f * nB - 0.4681243f * nR;
+    float db = nY + 1.8556f * nB;
+    if (gmView > 0.5f) return make_float3(0.45f + dr, 0.45f + dg, 0.45f + db);
+    float orr = _clampf(r + dr, _fminf(r, 0.0f), _fmaxf(r, 1.0f));
+    float og = _clampf(g + dg, _fminf(g, 0.0f), _fmaxf(g, 1.0f));
+    float ob = _clampf(b + db, _fminf(b, 0.0f), _fmaxf(b, 1.0f));
+    return make_float3(orr, og, ob);
+}

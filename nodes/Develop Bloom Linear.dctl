@@ -1,0 +1,10 @@
+// Develop Bloom, main branch: the graded picture as linear light times 1/8, for the Bloom Layer Mixer (Add).
+// Rec.709 gamma 2.4 in. Sits after the Develop look node, beside Develop Bloom Bright. MIT License.
+
+__DEVICE__ float toLin(float x) { return _powf(_fmaxf(x, 0.0f), 2.4f); }
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    return make_float3(toLin(_tex2D(p_TexR, p_X, p_Y)) * 0.125f, toLin(_tex2D(p_TexG, p_X, p_Y)) * 0.125f,
+                       toLin(_tex2D(p_TexB, p_X, p_Y)) * 0.125f);
+}

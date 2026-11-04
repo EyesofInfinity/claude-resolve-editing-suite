@@ -1,0 +1,287 @@
+// Develop Glow Plus: glows, a pre-flashed film, a free lens and flashbulbs, in one transform DCTL. Eight modes:
+//   0 Glow: light over Threshold spreads into a glow, each colour a little wider than the last (Spread: blue widest, as
+//     haze scatters it), Falloff from a tight halo to a long tail; Key Hue and Key Width glow only chosen colours;
+//     Atmosphere breaks the far glow into slow drifting wisps.
+//   1 Distance: a glow measured from the edge of each bright shape, the same width round a thin line as round a big
+//     shape, as a neon tube glows in haze.
+//   2 Aura: fine streamers standing out from the outline of bright shapes, as round an object in a corona discharge
+//     photograph, flickering at Rate, their colour swinging round Tint Hue by Spread.
+//   3 Colorize: the glow's own brightness through a gradient, Edge Hue at its rim to Tint Hue and white at its core, as
+//     a hot glow runs from red to white.
+//   4 Edges: light hugging the outline of the bright shapes (keyed by brightness), outside it (Balance 0), inside it
+//     (100) or both.
+//   5 Flashing: a pre-flashed film: a little even light on the negative lifts and tints the shadows and lowers their
+//     contrast (Balance 0); flashing the print dulls the highlights instead (Balance 100). Tint Hue is the flash.
+//   6 Free Lens: a lens held off the body and tilted: the plane of focus tilts into a sharp band at Angle and Position,
+//     the blur growing either side (Size), light leaking in at the gap on one side (Balance), the whole drifting as the
+//     hand does (Rate).
+//   7 Flashbulbs: camera flashes going off over the frame, each lasting one frame, at Rate, in a band at Position
+//     (Spread its height); each lights what is near it (Balance).
+// Light is added in linear. Moves by TIMELINE_FRAME_INDEX (Glow's Atmosphere, Aura, Free Lens, Flashbulbs): an OpenFX
+// DCTL effect or a DCTL plugin node. Amount 0 is the input exactly. MIT License.
+
+DEFINE_UI_PARAMS(gpAmount,  Glow,         DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gpMode,    Mode,         DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 7.0, 1.0)
+DEFINE_UI_PARAMS(gpThresh,  Threshold,    DCTLUI_SLIDER_FLOAT, 75.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gpSize,    Size,         DCTLUI_SLIDER_FLOAT, 35.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gpFall,    Falloff,      DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gpSpread,  Spread,       DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gpHue,     Tint Hue,     DCTLUI_SLIDER_FLOAT, 35.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(gpTint,    Tint,         DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gpHue2,    Edge Hue,     DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(gpKeyHue,  Key Hue,      DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(gpKeyW,    Key Width,    DCTLUI_SLIDER_FLOAT, 180.0, 10.0, 180.0, 1.0)
+DEFINE_UI_PARAMS(gpAtmos,   Atmosphere,   DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gpBroad,   Broad,        DCTLUI_SLIDER_FLOAT, 15.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gpBalance, Balance,      DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gpAngle,   Angle,        DCTLUI_SLIDER_FLOAT, 20.0, 0.0, 180.0, 1.0)
+DEFINE_UI_PARAMS(gpPos,     Position,     DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gpRate,    Rate,         DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gpSeed,    Seed,         DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Mode, "0 Glow, 1 Distance, 2 Aura, 3 Colorize, 4 Edges, 5 Flashing, 6 Free Lens, 7 Flashbulbs")
+DEFINE_UI_TOOLTIP(Spread, "Glow: blue wider than red; Aura: colour swing; Flashbulbs: the band's height")
+DEFINE_UI_TOOLTIP(Edge Hue, "Colorize: the glow's colour at its rim")
+DEFINE_UI_TOOLTIP(Broad, "Glow and Colorize: how much broad bright areas (a sky) glow; real lights glow in full")
+DEFINE_UI_TOOLTIP(Key Width, "Glow: degrees of hue either side of Key Hue that glow; 180 every colour")
+DEFINE_UI_TOOLTIP(Balance, "Edges: outside 0 to inside 100; Flashing: shadows 0 to highlights 100; Free Lens: the leak; Flashbulbs: how much they light")
+DEFINE_UI_TOOLTIP(Position, "Free Lens: where the sharp band crosses; Flashbulbs: the band's height (0 top)")
+DEFINE_UI_TOOLTIP(Rate, "Aura: flicker; Free Lens: the hand's drift; Flashbulbs: flashes a second")
+
+#include "glare.h"
+
+__DEVICE__ float4 glowGp(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, float fx, float fy, float R, float fall, float spr,
+                         float thr, float kh, float kw, float atm, float z, float sc, float broad, uint seed, int w, int h)
+{
+    float sr = 1.0f / (1.0f + 0.5f * spr), sg = (1.0f + 0.25f * spr) / (1.0f + 0.5f * spr);
+    float ar = 0.0f, ag = 0.0f, ab = 0.0f, ak = 0.0f, wr = 0.0f, wg = 0.0f, wb = 0.0f;
+    float hh = (float)(h);
+    for (int i = 0; i < 96; i++) {
+        float t = ((float)(i) + 0.5f) / 96.0f;
+        float r = R * _powf(t, 1.6f), a = 2.3999632f * (float)(i);
+        float dA = _powf(t, 2.2f);
+        float kr, kg, kb;
+        {
+            float q = r / (R * sr);
+            kr = q >= 1.0f ? 0.0f : ((1.0f - fall) * _expf(-4.0f * q * q) + fall * (1.0f - sstep(0.6f, 1.0f, q)) / (1.0f + (q / 0.08f) * (q / 0.08f)));
+            q = r / (R * sg);
+            kg = q >= 1.0f ? 0.0f : ((1.0f - fall) * _expf(-4.0f * q * q) + fall * (1.0f - sstep(0.6f, 1.0f, q)) / (1.0f + (q / 0.08f) * (q / 0.08f)));
+            q = r / R;
+            kb = q >= 1.0f ? 0.0f : ((1.0f - fall) * _expf(-4.0f * q * q) + fall * (1.0f - sstep(0.6f, 1.0f, q)) / (1.0f + (q / 0.08f) * (q / 0.08f)));
+        }
+        kr *= dA; kg *= dA; kb *= dA;
+        wr += kr; wg += kg; wb += kb;
+        float tx = fx + r * _cosf(a), ty = fy + r * _sinf(a);
+        float3 c = bilL(tr, tg, tb, tx, ty, w, h);
+        float k = keyGl(c, thr, kh, kw);
+        if (k <= 0.0f) continue;
+        if (r > 6.0f * sc) {
+            float q = 0.5f * _sqrtf(dA * 3.2f / 96.0f) * 1.77f * R;
+            float g = 0.0f;
+            g += keyGl(rgbAt(tr, tg, tb, (int)(tx + q), (int)(ty), w, h), thr, kh, kw);
+            g += keyGl(rgbAt(tr, tg, tb, (int)(tx - q), (int)(ty), w, h), thr, kh, kw);
+            g += keyGl(rgbAt(tr, tg, tb, (int)(tx), (int)(ty + q), w, h), thr, kh, kw);
+            g += keyGl(rgbAt(tr, tg, tb, (int)(tx), (int)(ty - q), w, h), thr, kh, kw);
+            k *= sstep(0.25f, 0.75f, 0.25f * g);
+            if (k <= 0.0f) continue;
+            if (atm > 0.0f) {
+                float n = fbm(tx / (0.12f * hh), ty / (0.12f * hh), z, 3, seed + 70u);
+                k *= 1.0f - atm * sstep(0.2f, 0.6f, r / R) * (1.0f - sstep(0.35f, 0.75f, n));
+            }
+        }
+        if (broad < 1.0f) {
+            int qx = mirL((int)(_floorf(tx + 0.5f)), w), qy = mirL((int)(_floorf(ty + 0.5f)), h);
+            float Lq = lumaTexGl(tr, tg, tb, qx, qy);
+            float pt = Lq > thr ? compactGl(tr, tg, tb, qx, qy, Lq, _fmaxf(4.0f * sc, 2.5f), w, h).x : 0.0f;
+            k *= broad + 2.5f * (1.0f - broad) * pt;
+            if (k <= 0.0f) continue;
+        }
+        float lr = toLin(_saturatef(c.x)), lg = toLin(_saturatef(c.y)), lb = toLin(_saturatef(c.z));
+        ar += kr * k * lr; ag += kg * k * lg; ab += kb * k * lb; ak += kg * k;
+    }
+    return make_float4(ar / _fmaxf(wr, 1e-9f), ag / _fmaxf(wg, 1e-9f), ab / _fmaxf(wb, 1e-9f), ak / _fmaxf(wg, 1e-9f));
+}
+
+__DEVICE__ float4 ringsGp(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, float fx, float fy, float R, float fall, float thr,
+                          float sc, int w, int h)
+{
+    float gpre = (thr - 0.2848f) / 0.7152f, pw = 1.0f + 3.0f * fall;
+    float L0 = lumaTexGl(tr, tg, tb, mirL((int)(fx), w), mirL((int)(fy), h));
+    if (L0 > thr + 0.08f) return make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    float st = 1.5f * _fmaxf(sc, 0.67f);
+    int nr = clampi((int)(R / st), 1, 60);
+    float best = 0.0f, bx = 0.0f, by = 0.0f, dx = 0.0f, dy = 0.0f;
+    for (int k = 1; k <= 60; k++) {
+        if (k > nr) break;
+        float r = (float)(k) * st, u = r / R;
+        float fk = _powf(_fmaxf(1.0f - u, 0.0f), pw);
+        if (fk <= best) break;
+        int m = clampi((int)(6.2831853f * (float)(k)) + 1, 6, 400);
+        for (int i = 0; i < 400; i++) {
+            if (i >= m) break;
+            float a = 6.2831853f * ((float)(i) + 0.618f * (float)(k)) / (float)(m);
+            float ca = _cosf(a), sa = _sinf(a);
+            float tx = fx + r * ca, ty = fy + r * sa;
+            if (greenAnyGl(tg, tx, ty, gpre, w, h) != 1) continue;
+            float3 c = bilL(tr, tg, tb, tx, ty, w, h);
+            float kk = sstep(thr, thr + 0.08f, luma(_saturatef(c.x), _saturatef(c.y), _saturatef(c.z)));
+            float g = kk * fk;
+            if (g <= 0.0f) continue;
+            float g2 = g * g, g8 = g2 * g2 * g2 * g2;
+            dx += g8 * ca; dy += g8 * sa;
+            if (g > best) { best = g; bx = r * ca; by = r * sa; }
+        }
+    }
+    if (best <= 0.0f) return make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    return make_float4(best, bx, by, _atan2f(dy, dx));
+}
+__DEVICE__ float2 bulbsGp(float x, float y, int fr, float p, float bc, float bh, float szs, uint seed)
+{
+    float cs = 0.1f, ar = 0.0f, pop = 0.0f;
+    int gx = (int)(_floorf(x / cs)), gy = (int)(_floorf(y / cs));
+    for (int cb = 0; cb < 18; cb++) {
+        int i = cb % 3 - 1, j = (cb / 3) % 3 - 1, b = cb / 9;
+        uint ux = (uint)(gx + i + 4096), uy = (uint)(gy + j + 4096) + (uint)(b) * 8192u;
+        float bx = ((float)(gx + i) + 0.1f + 0.8f * hash01(ux, uy, seed + 13u)) * cs;
+        float by = ((float)(gy + j) + 0.1f + 0.8f * hash01(ux, uy, seed + 14u)) * cs;
+        float inb = 1.0f - sstep(0.7f, 1.0f, _fabs(by - bc) / _fmaxf(bh, 0.01f));
+        if (inb <= 0.0f) continue;
+        float f = 0.0f;
+        if (hash01(ux, uy, seed + 20u + (uint)(fr + 100000) * 3u) < p * inb) f = 1.0f;
+        else if (hash01(ux, uy, seed + 20u + (uint)(fr + 99999) * 3u) < p * inb) f = 0.12f;
+        if (f <= 0.0f) continue;
+        float dx = x - bx, dy = y - by, d = _sqrtf(dx * dx + dy * dy);
+        float win = 1.0f - sstep(0.065f, 0.1f, d);
+        if (win <= 0.0f) continue;
+        float core = _expf(-(d / (0.005f * szs)) * (d / (0.005f * szs)));
+        float halo = _expf(-d / (0.012f * szs));
+        float cross = _expf(-(dy / 0.0015f) * (dy / 0.0015f)) * _expf(-_fabs(dx) / (0.016f * szs))
+                    + _expf(-(dx / 0.0015f) * (dx / 0.0015f)) * _expf(-_fabs(dy) / (0.016f * szs));
+        float s = win * f * (0.6f + 0.4f * hash01(ux, uy, seed + 15u));
+        ar += s * (4.0f * core + 0.7f * halo + 0.4f * cross);
+        pop += s * _expf(-d / 0.035f);
+    }
+    return make_float2(ar, pop);
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (gpAmount <= 0.0f) return c0;
+    int m = (int)(gpMode + 0.5f);
+    float sc = (float)(H) / 1080.0f, fx = (float)(x), fy = (float)(y), hh = (float)(H);
+    float amt = gpAmount / 100.0f, thr = gpThresh / 100.0f, fall = gpFall / 100.0f, spr = gpSpread / 100.0f;
+    float bal = gpBalance / 100.0f, tw = gpTint / 100.0f;
+    float tsec = (float)(TIMELINE_FRAME_INDEX) / 24.0f;
+    uint seed = (uint)(gpSeed) * 131u + 11u;
+    float3 hc = hueGl(gpHue);
+    float r = toLin(c0.x), g = toLin(c0.y), b = toLin(c0.z);
+    float lr = 0.0f, lg = 0.0f, lb = 0.0f;
+    if (m == 0 || m == 3 || m == 4) {
+        float R = (4.0f + 1.6f * gpSize) * sc;
+        float4 gl = glowGp(p_TexR, p_TexG, p_TexB, fx, fy, R, fall, m == 0 ? spr : 0.0f, thr, gpKeyHue, m == 0 ? gpKeyW : 180.0f,
+                           m == 0 ? gpAtmos / 100.0f : 0.0f, tsec * 0.25f, sc, m == 4 ? 1.0f : gpBroad / 100.0f, seed, W, H);
+        float on = 1.0f - 0.8f * keyGl(c0, thr, 0.0f, 180.0f);
+        if (m == 0) {
+            float k = 1.0f * amt * on;
+            lr = gl.x * k; lg = gl.y * k; lb = gl.z * k;
+        } else if (m == 3) {
+            float v = luma(gl.x, gl.y, gl.z) * 1.0f * amt * on;
+            float t = _saturatef(_sqrtf(v * 2.5f));
+            float3 ec = hueGl(gpHue2);
+            float3 cc = t < 0.6f ? make_float3(lerp1(ec.x, hc.x, t / 0.6f), lerp1(ec.y, hc.y, t / 0.6f), lerp1(ec.z, hc.z, t / 0.6f))
+                                 : make_float3(lerp1(hc.x, 1.0f, (t - 0.6f) / 0.4f), lerp1(hc.y, 1.0f, (t - 0.6f) / 0.4f), lerp1(hc.z, 1.0f, (t - 0.6f) / 0.4f));
+            float cm = _fmaxf(luma(cc.x, cc.y, cc.z), 0.05f);
+            lr = v * cc.x / cm; lg = v * cc.y / cm; lb = v * cc.z / cm;
+        } else {
+            float k0 = keyGl(c0, thr, 0.0f, 180.0f), cov = _saturatef(gl.w);
+            float rim = (1.0f - bal) * (1.0f - k0) * cov * 2.0f + bal * k0 * (1.0f - cov) * 2.0f;
+            float gm = _fmaxf(luma(gl.x, gl.y, gl.z), 1e-6f);
+            float cr = gl.x / gm, cg = gl.y / gm, cb = gl.z / gm;
+            if (cov <= 0.0f) { cr = 1.0f; cg = 1.0f; cb = 1.0f; }
+            float k = 0.9f * amt * rim;
+            lr = k * cr * 0.5f; lg = k * cg * 0.5f; lb = k * cb * 0.5f;
+        }
+    } else if (m == 1 || m == 2) {
+        float R = (6.0f + 0.6f * gpSize) * sc;
+        float4 rs = ringsGp(p_TexR, p_TexG, p_TexB, fx, fy, R, fall, thr, sc, W, H);
+        if (rs.x > 0.0f) {
+            float bd = _sqrtf(rs.y * rs.y + rs.z * rs.z);
+            float ex = 1.0f + 1.5f / _fmaxf(bd, 1.0f);
+            float3 lc = linL(p_TexR, p_TexG, p_TexB, fx + rs.y * ex, fy + rs.z * ex, W, H);
+            float lm = _fmaxf(luma(lc.x, lc.y, lc.z), 1e-4f);
+            float cr = _fminf(lc.x / lm, 3.0f), cg = _fminf(lc.y / lm, 3.0f), cb = _fminf(lc.z / lm, 3.0f);
+            float G = rs.x;
+            if (m == 2) {
+                float qx = (fx + rs.y) / (5.0f * sc), qy = (fy + rs.z) / (5.0f * sc);
+                float n = vnoise3(qx + 4096.0f, qy + 4096.0f, tsec * (0.5f + 4.0f * gpRate / 100.0f), seed + 6u);
+                float st = sstep(0.45f, 0.85f, n);
+                G *= 0.2f + 0.8f * st * (1.0f - 0.5f * sstep(0.3f, 1.0f, bd / R));
+                float3 ac = hueGl(gpHue + 1.2f * gpSpread * (2.0f * vnoise3(qx * 0.15f + 4096.0f, qy * 0.15f + 4096.0f, tsec * 0.2f, seed + 7u) - 1.0f));
+                cr = lerp1(cr, ac.x * 1.4f, 0.8f); cg = lerp1(cg, ac.y * 1.4f, 0.8f); cb = lerp1(cb, ac.z * 1.4f, 0.8f);
+            }
+            float k = (m == 2 ? 0.5f : 0.35f) * amt * G;
+            lr = k * cr; lg = k * cg; lb = k * cb;
+        }
+    } else if (m == 5) {
+        float f = 0.03f * amt;
+        float3 fc = make_float3(lerp1(1.0f, hc.x, tw), lerp1(1.0f, hc.y, tw), lerp1(1.0f, hc.z, tw));
+        float fm = _fmaxf(luma(fc.x, fc.y, fc.z), 1e-4f);
+        fc = make_float3(fc.x / fm, fc.y / fm, fc.z / fm);
+        float sr = (r + f * fc.x) / (1.0f + f), sg = (g + f * fc.y) / (1.0f + f), sb = (b + f * fc.z) / (1.0f + f);
+        float hr = 1.0f - toDisp((toLin(1.0f - c0.x) + f * (2.0f - fc.x)) / (1.0f + f));
+        float hg = 1.0f - toDisp((toLin(1.0f - c0.y) + f * (2.0f - fc.y)) / (1.0f + f));
+        float hb = 1.0f - toDisp((toLin(1.0f - c0.z) + f * (2.0f - fc.z)) / (1.0f + f));
+        float3 o = make_float3(lerp1(toDisp(sr), hr, bal), lerp1(toDisp(sg), hg, bal), lerp1(toDisp(sb), hb, bal));
+        return make_float3(_saturatef(o.x), _saturatef(o.y), _saturatef(o.z));
+    } else if (m == 6) {
+        float rt = gpRate / 100.0f;
+        float an = gpAngle * 0.0174533f + 0.35f * rt * (vnoise3(tsec * 0.4f + 4096.0f, 1.5f, 0.5f, seed + 1u) - 0.5f);
+        float ps = (gpPos - 50.0f) / 50.0f + 0.5f * rt * (vnoise3(tsec * 0.3f + 4096.0f, 7.5f, 0.5f, seed + 2u) - 0.5f);
+        float nx = -_sinf(an), ny = _cosf(an);
+        float ux = (fx - 0.5f * (float)(W)) / hh, uy = (fy - 0.5f * hh) / hh;
+        float dn = (ux * nx + uy * ny) / 0.5f - ps;
+        float rb = amt * (1.0f + 0.2f * gpSize) * sc * sstep(0.08f, 1.0f, _fabs(dn));
+        if (rb > 0.5f) {
+            float jr = 6.2831853f * hash01((uint)(x) + 4096u, (uint)(y) + 4096u, seed + 31u), jq = hash01((uint)(x) + 4096u, (uint)(y) + 4096u, seed + 32u);
+            float sr = 0.0f, sg = 0.0f, sb = 0.0f;
+            for (int i = 0; i < 48; i++) {
+                float q = _sqrtf(((float)(i) + jq) / 48.0f) * rb, a = 2.3999632f * (float)(i) + jr;
+                float3 c = linL(p_TexR, p_TexG, p_TexB, fx + q * _cosf(a), fy + q * _sinf(a), W, H);
+                sr += c.x; sg += c.y; sb += c.z;
+            }
+            r = sr / 48.0f; g = sg / 48.0f; b = sb / 48.0f;
+        }
+        float ex = 0.5f * (_fabs(nx) * (float)(W) / hh + _fabs(ny));
+        float de = _fmaxf(ex - (ux * nx + uy * ny), 0.0f);
+        float lk = bal * amt * _expf(-de / 0.28f) * (0.55f + 0.9f * fbm(ux * 1.5f, uy * 1.5f, tsec * 0.3f * (0.3f + rt), 3, seed + 40u));
+        float3 kc = hueGl(gpHue);
+        float km = _fmaxf(luma(kc.x, kc.y, kc.z), 0.05f);
+        float haze = 0.35f * _saturatef(lk);
+        r = r * (1.0f - haze) + haze * 0.18f; g = g * (1.0f - haze) + haze * 0.18f; b = b * (1.0f - haze) + haze * 0.18f;
+        lr = 0.6f * lk * lerp1(1.0f, kc.x / km, 0.8f); lg = 0.6f * lk * lerp1(1.0f, kc.y / km, 0.8f); lb = 0.6f * lk * lerp1(1.0f, kc.z / km, 0.8f);
+        float vg = 1.0f - 0.25f * amt * sstep(0.2f, 1.2f, (ux * nx + uy * ny) * -1.0f / _fmaxf(ex, 0.1f));
+        r *= vg; g *= vg; b *= vg;
+        return lightOut(r + lr, g + lg, b + lb, _saturatef(lr + lg + lb));
+    } else {
+        float aspect = (float)(W) / hh;
+        float bh = 0.05f + 0.45f * spr;
+        float nb = 2.0f * aspect / 0.01f * _fminf(2.0f * bh, 1.0f);
+        float p = 12.0f * gpRate / 100.0f / (24.0f * _fmaxf(nb, 1.0f));
+        float2 fb = bulbsGp(fx / hh, fy / hh, TIMELINE_FRAME_INDEX, p, gpPos / 100.0f, bh, 0.5f + gpSize / 50.0f, seed);
+        float3 fc = make_float3(lerp1(0.95f, hc.x, tw), lerp1(0.97f, hc.y, tw), lerp1(1.0f, hc.z, tw));
+        float pe = 1.0f + 3.0f * bal * fb.y;
+        r *= pe; g *= pe; b *= pe;
+        lr = amt * fb.x * fc.x; lg = amt * fb.x * fc.y; lb = amt * fb.x * fc.z;
+        if (lr + lg + lb <= 0.0f && pe <= 1.0f) return c0;
+        return lightOut(r + lr, g + lg, b + lb, _saturatef(lr + lg + lb + (pe - 1.0f)));
+    }
+    if (m != 3 && m != 7 && tw > 0.0f) {
+        float mm = (lr + lg + lb) * 0.55f;
+        lr = lerp1(lr, mm * hc.x, tw); lg = lerp1(lg, mm * hc.y, tw); lb = lerp1(lb, mm * hc.z, tw);
+    }
+    float added = lr + lg + lb;
+    if (added <= 0.0f) return c0;
+    return lightOut(r + lr, g + lg, b + lb, _saturatef(added));
+}

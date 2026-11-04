@@ -1,0 +1,19 @@
+{
+ "schema": "develop.look/0",
+ "name": "Day for Night",
+ "values": {
+  "ntAmt": 100,
+  "ntStops": 4.4,
+  "ntSky": 0,
+  "ntSat": 75,
+  "ntHue": 222,
+  "ntKeep": 25,
+  "ntContr": -5,
+  "ntRod": 80,
+  "ntLight": 30,
+  "ntLStart": 65,
+  "ntLTint": 80,
+  "ntDetail": 20,
+  "filmGrain": 18
+ }
+}

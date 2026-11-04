@@ -1,0 +1,238 @@
+// Develop Optics: six looks (Pastel, Pencil, Rainbow, Soft Light, Star and Flag / Dot) in one transform DCTL, each
+// built from what the real thing is:
+//   0 Pastel: soft chalk laid in strokes on toned paper. The picture is smeared along the hand's strokes (Angle, turned
+//     patch by patch and drawn along strong edges), lifted and made matte as chalk is; the chalk catches only on the
+//     paper's tooth and the stroke's streaks, so the paper shows through where the pressure is light.
+//   1 Pencil: a graphite drawing whose whole tone is built from strokes that follow the forms (the strokes run along
+//     the picture's edges, Angle where it is flat), a second set crossing them in the darks, fine contour lines where
+//     a form turns dark against its surround, graphite skipping the paper's valleys. Colour turns it to coloured pencil.
+//     Boil redraws the Pastel and Pencil strokes every few frames by TIMELINE_FRAME_INDEX, as a drawn film boils (strokes
+//     held over moving footage slide like a screen door); 0 holds them; the paper stays.
+//   2 Rainbow: a primary bow at 42 degrees round the point opposite the sun, red outside and violet inside, each
+//     wavelength its own band so the colours overlap as a real bow's do; the sky brighter inside it, the dark band
+//     between it and the fainter, reversed secondary at 51 degrees; broken here and there by the rain. Light added in
+//     linear.
+//   3 Soft Light: a big soft source. Whatever sits darker than the light around it is filled toward it (nearly
+//     shadowless), highlights diffuse a little, and a broad light from Position, tinted by Warmth, wraps the frame.
+//   4 Star: a star filter's diffraction. Every highlight over Threshold throws Points arms (on 8 the second four
+//     shorter, as from a two-grid filter), long and falling off from the core, the colours separating toward the tips
+//     in faint beads (Colour), with a small halo at the core. Static, as a filter on a lens is.
+//   5 Flag / Dot: a flag (Round 0, a rectangle) or a dot (Round 100, a circle) set in the light: the area behind it
+//     loses up to three stops of key light with a soft penumbra (Softness), the brights cut more than the shadows that
+//     the key never reached, the shade a little cool from the fill (Colour).
+// An OpenFX DCTL effect or a DCTL plugin node. Amount mixes with the picture in display terms; Amount 0 is the input
+// exactly. MIT License.
+
+DEFINE_UI_PARAMS(opAmount, Optics,      DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(opMode,   Mode,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 5.0, 1.0)
+DEFINE_UI_PARAMS(opSize,   Size,        DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(opLevel,  Level,       DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(opSoft,   Softness,    DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(opColour, Colour,      DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(opAngle,  Angle,       DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 180.0, 1.0)
+DEFINE_UI_PARAMS(opX,      Position X,  DCTLUI_SLIDER_FLOAT, 50.0, -50.0, 150.0, 1.0)
+DEFINE_UI_PARAMS(opY,      Position Y,  DCTLUI_SLIDER_FLOAT, 35.0, -50.0, 150.0, 1.0)
+DEFINE_UI_PARAMS(opPaper,  Paper,       DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(opWarm,   Warmth,      DCTLUI_SLIDER_FLOAT, 30.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(opThresh, Threshold,   DCTLUI_SLIDER_FLOAT, 90.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(opPoints, Points,      DCTLUI_SLIDER_FLOAT, 6.0, 4.0, 8.0, 2.0)
+DEFINE_UI_PARAMS(opRound,  Round,       DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(opAspect, Aspect,      DCTLUI_SLIDER_FLOAT, 65.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(opBoil,   Boil,        DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(opSeed,   Seed,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Mode, "0 Pastel, 1 Pencil, 2 Rainbow, 3 Soft Light, 4 Star, 5 Flag / Dot")
+DEFINE_UI_TOOLTIP(Size, "Stroke length, the bow's radius, the light's reach, the star's arms, the flag's size")
+DEFINE_UI_TOOLTIP(Level, "Pressure, the bow's brightness, the fill, the star's brightness, the flag's density")
+DEFINE_UI_TOOLTIP(Position Y, "Rainbow: the top of the bow; Soft Light: the source; Flag / Dot: its centre")
+DEFINE_UI_TOOLTIP(Paper, "Pastel and Pencil: the paper's tone and tooth")
+DEFINE_UI_TOOLTIP(Warmth, "Soft Light: the light's colour, warm above 0, cool below")
+DEFINE_UI_TOOLTIP(Round, "Flag / Dot: 0 a rectangular flag, 100 a round dot")
+DEFINE_UI_TOOLTIP(Aspect, "Flag / Dot: wide above 50, tall below")
+DEFINE_UI_TOOLTIP(Boil, "Pastel and Pencil: how often the strokes are redrawn; 0 holds them")
+
+#include "optics.h"
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (opAmount <= 0.0f) return c0;
+    int m = (int)(opMode + 0.5f);
+    float sc = (float)(H) / 1080.0f, fx = (float)(x), fy = (float)(y);
+    float an = opAngle * 0.0174533f, lvl = opLevel / 100.0f, soft = opSoft / 100.0f, col = opColour / 100.0f;
+    uint sd = (uint)(opSeed) * 613u + 3u;
+    int every = opBoil <= 0.0f ? 0 : 2 + (int)((100.0f - opBoil) / 100.0f * 12.0f);
+    uint sb = sd + (every == 0 ? 0u : (uint)(TIMELINE_FRAME_INDEX / every) * 7919u);
+    float3 o = c0;
+    if (m == 0) {
+        float3 pc = crossO(p_TexR, p_TexG, p_TexB, x, y, (int)(2.0f * sc + 0.5f), W, H);
+        float L = luma(pc.x, pc.y, pc.z);
+        float tooth = toothO(fx, fy, sc, sd + 7u);
+        float pr = _saturatef(0.24f + 0.45f * lvl + 0.20f * (1.0f - L));
+        float g0 = (9.0f + 0.16f * opSize) * sc;
+        float4 s0 = strokeLayerO(p_TexR, p_TexG, p_TexB, fx, fy, g0, an, pc, pr, tooth, sc, sb + 100u, W, H);
+        float4 s1 = strokeLayerO(p_TexR, p_TexG, p_TexB, fx, fy, g0 * 0.55f, an + 0.25f, pc, pr * 0.92f, tooth, sc, sb + 200u, W, H);
+        float3 k0 = chalkO(make_float3(s0.x, s0.y, s0.z), col), k1 = chalkO(make_float3(s1.x, s1.y, s1.z), col);
+        float pp = opPaper / 100.0f;
+        float3 paper = make_float3(lerp1(0.95f, 0.60f, pp), lerp1(0.93f, 0.57f, pp), lerp1(0.88f, 0.52f, pp));
+        float3 kc = chalkO(pc, col);
+        float3 base = mix3o(paper, kc, _saturatef(0.62f + 0.30f * soft - 0.45f * sstep(0.35f, 0.0f, tooth)));
+        o = mix3o(mix3o(base, k0, s0.w), k1, s1.w * (0.85f - 0.25f * soft));
+    } else if (m == 1) {
+        float3 t = crossO(p_TexR, p_TexG, p_TexB, x, y, (int)(1.5f * sc + 0.5f), W, H);
+        float L = luma(t.x, t.y, t.z);
+        float dark = _powf(_saturatef((1.0f - L) * (0.55f + 0.9f * lvl)), 1.35f);
+        float2 fl = flowO(p_TexR, p_TexG, p_TexB, x, y, (int)(3.0f * sc + 0.5f), (int)(4.0f * sc + 0.5f), an, 0.006f, W, H);
+        float gr = 1.1f * sc, st = 1.2f * sc;
+        float d1 = _fminf(dark * 1.1f, 0.58f), d2 = _saturatef((dark - 0.40f) / 0.60f) * 0.58f;
+        float ink1 = 0.0f, ink2 = 0.0f;
+        for (int k = 0; k < 2; k++) {
+            float wk = k == 0 ? 1.0f - fl.y : fl.y;
+            if (wk <= 0.0f) continue;
+            float ra = k == 0 ? an : fl.x;
+            float s1 = licTurnO(fx, fy, ra, st, 8, gr, sb + 21u), s2 = licTurnO(fx, fy, ra + 0.87f, st, 8, gr, sb + 22u);
+            ink1 += wk * sstep(1.0f - d1 - 0.14f, 1.0f - d1 + 0.14f, s1) * sstep(0.0f, 0.06f, d1);
+            ink2 += wk * sstep(1.0f - d2 - 0.14f, 1.0f - d2 + 0.14f, s2) * sstep(0.0f, 0.06f, d2);
+        }
+        float3 b = crossO(p_TexR, p_TexG, p_TexB, x, y, (int)(4.0f * sc + 0.5f), W, H);
+        float3 b2 = crossO(p_TexR, p_TexG, p_TexB, x, y, (int)(7.0f * sc + 0.5f), W, H);
+        float Lb = 0.5f * (luma(b.x, b.y, b.z) + luma(b2.x, b2.y, b2.z));
+        float line = sstep(0.04f, 0.30f, 1.0f - (L + 0.03f) / (Lb + 0.03f)) * (0.55f + 0.45f * lvl);
+        float shd = 0.55f * sstep(0.72f, 1.0f, dark);
+        float ink = _fmaxf(1.0f - (1.0f - 0.85f * ink1) * (1.0f - 0.85f * ink2) * (1.0f - shd), line);
+        ink = lerp1(ink, dark * 0.8f, 0.6f * soft);
+        float tooth = toothO(fx, fy, sc, sd + 7u);
+        ink *= 0.80f + 0.20f * sstep(0.2f, 0.7f, tooth);
+        float pp = opPaper / 100.0f;
+        float pn = (tooth - 0.5f) * 0.04f * pp;
+        float3 paper = make_float3(0.965f - 0.04f * pp + pn, 0.958f - 0.05f * pp + pn, 0.94f - 0.08f * pp + pn);
+        float3 graph = mix3o(make_float3(0.23f, 0.23f, 0.255f), make_float3(t.x * 0.62f, t.y * 0.62f, t.z * 0.62f), col);
+        o = mix3o(paper, graph, ink * 0.93f);
+    } else if (m == 2) {
+        float R = (0.45f + 0.011f * opSize) * (float)(H);
+        float cxr = opX / 100.0f * (float)(W), cyr = opY / 100.0f * (float)(H) + R;
+        float dx = fx - cxr, dy = fy - cyr;
+        float th = _sqrtf(dx * dx + dy * dy) / R * 42.3f;
+        float sig = 0.30f + 1.0f * soft;
+        float phi = _atan2f(dx, -dy);
+        float rain = (0.35f + 0.65f * sstep(0.15f, 0.85f, fbm(phi * 0.8f + 3.0f, 0.5f, 0.0f, 2, sd + 31u))) * (1.0f - 0.55f * sstep(0.8f, 1.5f, _fabs(phi)));
+        float ar = 0.0f, ag = 0.0f, ab = 0.0f, wr = 0.0f, wg = 0.0f, wb = 0.0f;
+        for (int i = 0; i < 12; i++) {
+            float t = ((float)(i) + 0.5f) / 12.0f;
+            float3 sp = specL(t * 0.78f);
+            float xp = (th - (42.3f - 1.8f * t)) / sig;
+            float xs = (th - (50.4f + 3.1f * t)) / (sig * 1.35f);
+            float bow = _expf(-xp * xp) + 0.13f * _expf(-(xp + 2.7f + 0.5f * t) * (xp + 2.7f + 0.5f * t) * 1.6f) + 0.40f * _expf(-xs * xs);
+            ar += sp.x * bow; ag += sp.y * bow; ab += sp.z * bow;
+            wr += sp.x; wg += sp.y; wb += sp.z;
+        }
+        float br = ar / wr * 5.0f, bg = ag / wg * 5.0f, bb = ab / wb * 5.0f;
+        float bl = luma(br, bg, bb), viv = 0.45f + 0.55f * col;
+        br = lerp1(bl, br, viv); bg = lerp1(bl, bg, viv); bb = lerp1(bl, bb, viv);
+        float inner = 0.30f * _expf(-(42.0f - th) / 9.0f) * (1.0f - sstep(41.5f, 42.8f, th));
+        float band = sstep(42.6f, 44.0f, th) * (1.0f - sstep(49.0f, 50.6f, th));
+        rain *= 0.80f + 0.20f * fbm(fx / (120.0f * sc), fy / (700.0f * sc), 0.0f, 2, sd + 33u);
+        float gain = 0.12f * lvl * 2.0f * rain;
+        float3 l = make_float3(toLin(c0.x), toLin(c0.y), toLin(c0.z));
+        float dim = 1.0f - 0.22f * lvl * band * rain;
+        float r = l.x * dim + gain * (br + inner), gg = l.y * dim + gain * (bg + inner), b = l.z * dim + gain * (bb + inner);
+        o = lightOut(r, gg, b, _saturatef(gain * 4.0f));
+        if (gain <= 0.0f && dim >= 1.0f) o = c0;
+    } else if (m == 3) {
+        float3 l = make_float3(toLin(c0.x), toLin(c0.y), toLin(c0.z));
+        float R = (14.0f + 1.0f * opSize) * sc;
+        float rot = 6.2831853f * rnd3(x, y, sd + 41u);
+        float3 b1 = discLinO(p_TexR, p_TexG, p_TexB, fx, fy, R, 40, rot, W, H);
+        float3 b2 = discLinO(p_TexR, p_TexG, p_TexB, fx, fy, R * 0.35f, 12, rot + 1.3f, W, H);
+        float3 b = make_float3(0.65f * b1.x + 0.35f * b2.x, 0.65f * b1.y + 0.35f * b2.y, 0.65f * b1.z + 0.35f * b2.z);
+        float fill = 0.75f * lvl, dif = 0.35f * soft;
+        float r = l.x + _fmaxf(b.x - l.x, 0.0f) * fill - _fmaxf(l.x - b.x, 0.0f) * dif;
+        float g = l.y + _fmaxf(b.y - l.y, 0.0f) * fill - _fmaxf(l.y - b.y, 0.0f) * dif;
+        float bl = l.z + _fmaxf(b.z - l.z, 0.0f) * fill - _fmaxf(l.z - b.z, 0.0f) * dif;
+        float wm = opWarm / 100.0f;
+        float3 lc = wm >= 0.0f ? make_float3(1.0f, lerp1(1.0f, 0.80f, wm), lerp1(1.0f, 0.55f, wm)) : make_float3(lerp1(1.0f, 0.62f, -wm), lerp1(1.0f, 0.82f, -wm), 1.0f);
+        lc = make_float3(lerp1(1.0f, lc.x, col * 0.5f + 0.5f), lerp1(1.0f, lc.y, col * 0.5f + 0.5f), lerp1(1.0f, lc.z, col * 0.5f + 0.5f));
+        float lcl = luma(lc.x, lc.y, lc.z);
+        float ddx = fx - opX / 100.0f * (float)(W), ddy = fy - opY / 100.0f * (float)(H);
+        float reach = (0.35f + 0.012f * opSize) * (float)(H);
+        float fall = 1.0f / (1.0f + (ddx * ddx + ddy * ddy) / (reach * reach));
+        float gk = 0.55f * lvl * fall;
+        float tk = 0.5f * fall * (0.4f + 0.6f * lvl);
+        float tr = lerp1(1.0f, lc.x / lcl, tk), tg = lerp1(1.0f, lc.y / lcl, tk), tb = lerp1(1.0f, lc.z / lcl, tk);
+        float bL = luma(b.x, b.y, b.z);
+        float glow = 0.22f * soft * sstep(0.15f, 0.8f, bL);
+        r = r * (1.0f + gk * lc.x) * tr + 0.012f * lvl * fall * lc.x + glow * b.x;
+        g = g * (1.0f + gk * lc.y) * tg + 0.012f * lvl * fall * lc.y + glow * b.y;
+        bl = bl * (1.0f + gk * lc.z) * tb + 0.012f * lvl * fall * lc.z + glow * b.z;
+        o = lightOut(r, g, bl, 1.0f);
+    } else if (m == 4) {
+        float thr = opThresh / 100.0f;
+        float len = (40.0f + 2.4f * opSize) * sc;
+        int arms = (int)(opPoints + 0.5f);
+        float nr = 0.0f, ar = 0.0f, ag = 0.0f, ab = 0.0f, fr = 0.0f, fg = 0.0f, fb = 0.0f;
+        float rr = 5.0f * sc;
+        float stp = _fmaxf(1.0f, sc), gpre = (thr - 0.2848f) / 0.7152f;
+        for (int a = 0; a < 8; a++) {
+            if (a >= arms) break;
+            float aa = an + 6.2831853f * (float)(a) / (float)(arms);
+            float ca = _cosf(aa), sa = _sinf(aa);
+            float al = len * ((arms == 8 && (a & 1) == 1) ? 0.55f : 1.0f);
+            int nt = clampi((int)(al / stp), 8, 320), prev = 0;
+            for (int j = 1; j <= 320; j++) {
+                if (j > nt) break;
+                float d = (float)(j) * stp;
+                float tx = fx - d * ca, ty = fy - d * sa;
+                int gv = greenOverO(p_TexG, tx, ty, gpre, W, H);
+                if (gv == 2) break;
+                if (gv == 0) { prev = 0; continue; }
+                float3 hc = starTapO(p_TexR, p_TexG, p_TexB, tx, ty, rr, thr, W, H);
+                float hs = hc.x + hc.y + hc.z;
+                if (hs <= 0.0f) { prev = 0; continue; }
+                if (prev == 0) nr += 1.0f;
+                prev = 1;
+                float u = d / al;
+                float ur = u / (1.0f + 0.10f * col), ub = u / (1.0f - 0.10f * col);
+                float kr = (1.0f - _fminf(ur, 1.0f)) * (1.0f - _fminf(ur, 1.0f)) / (1.0f + 14.0f * ur);
+                float kg = (1.0f - _fminf(u, 1.0f)) * (1.0f - _fminf(u, 1.0f)) / (1.0f + 14.0f * u);
+                float kb = (1.0f - _fminf(ub, 1.0f)) * (1.0f - _fminf(ub, 1.0f)) / (1.0f + 14.0f * ub);
+                float bd = 0.35f * col;
+                kr *= 1.0f - bd + bd * _cosf(6.2831853f * ur * 7.0f) * _cosf(6.2831853f * ur * 7.0f);
+                kg *= 1.0f - bd + bd * _cosf(6.2831853f * u * 7.0f) * _cosf(6.2831853f * u * 7.0f);
+                kb *= 1.0f - bd + bd * _cosf(6.2831853f * ub * 7.0f) * _cosf(6.2831853f * ub * 7.0f);
+                float hm = hs / 3.0f, wf = sstep(0.08f, 0.45f, u);
+                float cr = lerp1(hc.x, hm, 0.5f) * kr, cg = lerp1(hc.y, hm, 0.5f) * kg, cb = lerp1(hc.z, hm, 0.5f) * kb;
+                ar += cr * (1.0f - wf); ag += cg * (1.0f - wf); ab += cb * (1.0f - wf);
+                fr += cr * wf; fg += cg * wf; fb += cb * wf;
+            }
+        }
+        float crowd = _fmaxf(nr - 1.0f, 0.0f);
+        float sn = 1.0f / (1.0f + 0.25f * crowd), sf = 1.0f / (1.0f + 0.9f * crowd);
+        ar = ar * sn + fr * sf; ag = ag * sn + fg * sf; ab = ab * sn + fb * sf;
+        float gain = 2.4f * lvl;
+        float r = toLin(c0.x) + ar * gain, g = toLin(c0.y) + ag * gain, b = toLin(c0.z) + ab * gain;
+        float added = (ar + ag + ab) * gain;
+        o = added > 0.0f ? lightOut(r, g, b, _saturatef(added)) : c0;
+    } else {
+        float s = (0.04f + 0.0046f * opSize) * (float)(H);
+        float ax = _exp2f((opAspect - 50.0f) / 25.0f);
+        float hx = s * _sqrtf(ax), hy = s / _sqrtf(ax);
+        float px = fx - opX / 100.0f * (float)(W), py = fy - opY / 100.0f * (float)(H);
+        float ca = _cosf(an), sa = _sinf(an);
+        float qx = px * ca + py * sa, qy = -px * sa + py * ca;
+        float rr = _fminf(hx, hy) * (0.04f + 0.96f * opRound / 100.0f);
+        float sdist = boxSDO(qx, qy, hx, hy, rr);
+        float pen = 2.0f * sc + s * (0.04f + 0.9f * soft);
+        float shade = 1.0f - sstep(-pen, pen, sdist);
+        if (shade <= 0.0f) return c0;
+        float3 l = make_float3(toLin(c0.x), toLin(c0.y), toLin(c0.z));
+        float Ll = luma(l.x, l.y, l.z);
+        float key = 0.55f + 0.45f * sstep(0.01f, 0.35f, Ll);
+        float cut = (1.0f - _exp2f(-3.0f * lvl)) * shade * key;
+        float cool = 0.12f * col * shade * lvl;
+        float r = l.x * (1.0f - cut) * (1.0f - cool), g = l.y * (1.0f - cut) * (1.0f - 0.35f * cool), b = l.z * (1.0f - cut) * (1.0f + 0.4f * cool);
+        o = make_float3(_saturatef(toDisp(r)), _saturatef(toDisp(g)), _saturatef(toDisp(b)));
+    }
+    float a = opAmount / 100.0f;
+    return make_float3(_saturatef(lerp1(c0.x, o.x, a)), _saturatef(lerp1(c0.y, o.y, a)), _saturatef(lerp1(c0.z, o.z, a)));
+}

@@ -1,0 +1,114 @@
+// Develop Emboss: the picture raised as a relief and lit, in one transform DCTL. The picture's brightness is the height (bright raised, or pressed in with Invert), smoothed
+// over Size with the fine relief of Detail on top, and lit from Light Angle at Light Height:
+//   0 Shiny: a glossy surface in the picture's colours (Colour toward a grey metal): diffuse light falling off on the
+//     slopes turned away, and a white specular highlight where a slope turns the light into the lens (Shine: how
+//     bright and how tight). A flat area keeps the picture.
+//   1 Glass: the picture seen through clear glass pressed with the relief: each slope bends the view (Depth), the
+//     colours parting a little as glass disperses them; steep slopes reflect more of a dim room (Fresnel), the glass
+//     is faintly green, and the light's highlight sits on top.
+// Light is added in linear (Rec.709 gamma 2.4 in and out). Still: nothing moves by frame. An OpenFX DCTL effect or a
+// DCTL plugin node. Amount mixes with the picture in display terms; Amount 0 is the input exactly. MIT License.
+
+DEFINE_UI_PARAMS(emAmount, Emboss,        DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(emStyle,  Style,         DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 1.0)
+DEFINE_UI_PARAMS(emDepth,  Depth,         DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(emSize,   Size,          DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(emDetail, Detail,        DCTLUI_SLIDER_FLOAT, 35.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(emAngle,  Light Angle,   DCTLUI_SLIDER_FLOAT, 135.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(emHeight, Light Height,  DCTLUI_SLIDER_FLOAT, 40.0, 5.0, 85.0, 1.0)
+DEFINE_UI_PARAMS(emShine,  Shine,         DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(emColour, Colour,        DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(emInvert, Invert,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Style, "0 Shiny, 1 Glass")
+DEFINE_UI_TOOLTIP(Size, "How broad the relief is: the radius its height is smoothed over")
+DEFINE_UI_TOOLTIP(Detail, "How much of the picture's fine detail stands in the relief")
+DEFINE_UI_TOOLTIP(Light Angle, "Where the light comes from: 0 the right, 90 the top, 135 the top left")
+DEFINE_UI_TOOLTIP(Light Height, "The light's height above the surface in degrees")
+DEFINE_UI_TOOLTIP(Colour, "Shiny: the picture's colour on the surface, 0 a grey metal; Glass: the colour seen through it")
+DEFINE_UI_TOOLTIP(Invert, "0 bright parts raised, 1 pressed in")
+
+#include "../lens/lens.h"
+
+__DEVICE__ float emL(float3 c)
+{
+    return 0.2126f * _saturatef(c.x) + 0.7152f * _saturatef(c.y) + 0.0722f * _saturatef(c.z);
+}
+
+__DEVICE__ float4 emSlope(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int x, int y, int w, int h, float s, float det)
+{
+    float fx = (float)(x), fy = (float)(y);
+    float sx = 0.0f, sy = 0.0f, ww = 0.0f;
+    for (int j = -2; j <= 2; j++) {
+        for (int i = -2; i <= 2; i++) {
+            if (i == 0 && j == 0) continue;
+            float wt = _expf(-(float)(i * i + j * j) / 2.9f);
+            float L = emL(bilL(tr, tg, tb, fx + (float)(i) * s, fy + (float)(j) * s, w, h));
+            sx += wt * (float)(i) * L; sy += wt * (float)(j) * L;
+            ww += wt * (float)(i * i);
+        }
+    }
+    float bx = sx / (ww * s), by = sy / (ww * s);
+    float a = emL(rgbAt(tr, tg, tb, x - 1, y - 1, w, h)), b = emL(rgbAt(tr, tg, tb, x, y - 1, w, h)), c = emL(rgbAt(tr, tg, tb, x + 1, y - 1, w, h));
+    float d = emL(rgbAt(tr, tg, tb, x - 1, y, w, h)), e = emL(rgbAt(tr, tg, tb, x + 1, y, w, h));
+    float g = emL(rgbAt(tr, tg, tb, x - 1, y + 1, w, h)), k = emL(rgbAt(tr, tg, tb, x, y + 1, w, h)), m = emL(rgbAt(tr, tg, tb, x + 1, y + 1, w, h));
+    float fxs = ((c + 2.0f * e + m) - (a + 2.0f * d + g)) / 8.0f, fys = ((g + 2.0f * k + m) - (a + 2.0f * b + c)) / 8.0f;
+    return make_float4(lerp1(bx, fxs, det), lerp1(by, fys, det), lerp1(bx, fxs, 0.25f * det), lerp1(by, fys, 0.25f * det));
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (emAmount <= 0.0f) return c0;
+    float amt = emAmount / 100.0f, sc = (float)(H) / 1080.0f;
+    int st = (int)(emStyle + 0.5f);
+    float s = (0.6f + 3.4f * emSize / 100.0f) * sc;
+    float4 g = emSlope(p_TexR, p_TexG, p_TexB, x, y, W, H, s, 0.8f * emDetail / 100.0f);
+    float dp = emDepth / 100.0f;
+    float k = (6.0f + 110.0f * dp * dp + 30.0f * dp) * sc * (emInvert > 0.5f ? -1.0f : 1.0f);
+    float nx = -k * g.x, ny = -k * g.y;
+    float nl = _sqrtf(nx * nx + ny * ny + 1.0f);
+    nx /= nl; ny /= nl;
+    float nz = 1.0f / nl;
+    float mx = -k * g.z, my = -k * g.w;
+    float ml = _sqrtf(mx * mx + my * my + 1.0f);
+    mx /= ml; my /= ml;
+    float mz = 1.0f / ml;
+    float az = emAngle * 0.0174533f, el = emHeight * 0.0174533f;
+    float lx = _cosf(el) * _cosf(az), ly = -_cosf(el) * _sinf(az), lz = _sinf(el);
+    float hx = lx, hy = ly, hz = lz + 1.0f;
+    float hl = _sqrtf(hx * hx + hy * hy + hz * hz);
+    hx /= hl; hy /= hl; hz /= hl;
+    float ndl = nx * lx + ny * ly + nz * lz, ndh = _fmaxf(mx * hx + my * hy + mz * hz, 0.0f);
+    float shine = emShine / 100.0f, col = emColour / 100.0f;
+    float p = 8.0f + 120.0f * shine * shine;
+    float sp0 = _powf(hz, p);
+    float spec = _fmaxf(_powf(ndh, p) - sp0, 0.0f) / (1.0f - sp0) * 1.8f * shine;
+    float r, gg, b, lit;
+    if (st == 0) {
+        float Y = luma(c0.x, c0.y, c0.z);
+        float br = toLin(lerp1(Y, c0.x, col)), bg = toLin(lerp1(Y, c0.y, col)), bb = toLin(lerp1(Y, c0.z, col));
+        float shade = (0.18f + 0.82f * _fmaxf(ndl, 0.0f)) / (0.18f + 0.82f * lz);
+        r = br * shade + spec; gg = bg * shade + spec; b = bb * shade + spec;
+        lit = 4.0f * spec + _fmaxf(shade - 1.0f, 0.0f);
+    } else {
+        float off = (10.0f + 40.0f * emDepth / 100.0f) * sc;
+        float fx = (float)(x), fy = (float)(y);
+        float tr = toLin(_saturatef(bilL(p_TexR, p_TexG, p_TexB, fx + nx * off * 0.94f, fy + ny * off * 0.94f, W, H).x));
+        float tg = toLin(_saturatef(bilL(p_TexR, p_TexG, p_TexB, fx + nx * off, fy + ny * off, W, H).y));
+        float tb = toLin(_saturatef(bilL(p_TexR, p_TexG, p_TexB, fx + nx * off * 1.06f, fy + ny * off * 1.06f, W, H).z));
+        float Yt = 0.2126f * tr + 0.7152f * tg + 0.0722f * tb;
+        tr = lerp1(Yt, tr, col); tg = lerp1(Yt, tg, col); tb = lerp1(Yt, tb, col);
+        float fr = 0.04f + 0.96f * _powf(1.0f - nz, 5.0f);
+        float fr0 = 0.04f;
+        float env = 0.03f + 0.25f * _fmaxf(ndl, 0.0f);
+        float keep = (1.0f - fr) / (1.0f - fr0);
+        r = (tr * 0.97f) * keep + (fr - fr0) * env + spec;
+        gg = (tg * 0.995f) * keep + (fr - fr0) * env + spec;
+        b = (tb * 0.98f) * keep + (fr - fr0) * env + spec;
+        lit = 4.0f * spec + 4.0f * (fr - fr0) * env;
+    }
+    float3 o = lightOut(r, gg, b, lit);
+    return make_float3(lerp1(c0.x, o.x, amt), lerp1(c0.y, o.y, amt), lerp1(c0.z, o.z, amt));
+}

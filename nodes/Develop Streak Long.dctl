@@ -1,0 +1,77 @@
+// Develop Streak, pass 3 of 3: the streak itself. Along the row, Develop Streak Mid's light gathered through an
+// exponential core (decay 6% of the frame width) plus a tail (decay 25%, weight 0.25), cut off smoothly at Streak
+// Length, sampled every 8 px at 1080 lines (the two earlier passes have smoothed the light at that scale). Each tap
+// takes a tint by its distance: near-white at the core, blue in the tails (0.85/0.92/1.00 to 0.30/0.55/1.00), or the
+// light's own colour with Streak Colour 100. The frame is black outside: a tap beyond the edge reads nothing, and a tap
+// whose 8 px cross the edge reads its pixels inside the frame one by one, so a light by the edge streaks into the frame
+// with a smooth line and less light than mid-frame. Out: the added light, linear times 1/8, for a Bloom Layer Mixer
+// input. MIT License.
+
+DEFINE_UI_PARAMS(stkAmt,  Streak,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(stkLen,  Streak Length, DCTLUI_SLIDER_FLOAT, 35.0, 5.0, 60.0, 1.0)
+DEFINE_UI_PARAMS(stkTint, Streak Colour, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Streak, "0 is off; how bright the anamorphic streaks through bright lights are")
+DEFINE_UI_TOOLTIP(Streak Length, "How far a streak reaches each side, in percent of the frame width")
+DEFINE_UI_TOOLTIP(Streak Colour, "0 is the anamorphic look (a white core, blue tails); 100 keeps each light's own colour")
+
+__DEVICE__ float luma(float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; }
+__DEVICE__ float smooth01(float a, float b, float x)
+{
+    float t = _saturatef((x - a) / (b - a));
+    return t * t * (3.0f - 2.0f * t);
+}
+
+__DEVICE__ float3 streakTap(int x, int y, float ad, float wt, float len, float core, float tail, float W, float own,
+                            __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float cy = luma(0.85f, 0.92f, 1.0f), ty = luma(0.30f, 0.55f, 1.0f);
+    float cr = 0.85f / cy, cg = 0.92f / cy, cb = 1.0f / cy, tr = 0.30f / ty, tg = 0.55f / ty, tb = 1.0f / ty;
+    float k = wt * ((_expf(-ad / core) + 0.25f * _expf(-ad / tail)) * (1.0f - smooth01(0.8f * len, len, ad)));
+    float r = _tex2D(p_TexR, x, y), g = _tex2D(p_TexG, x, y), b = _tex2D(p_TexB, x, y);
+    float yl = luma(r, g, b);
+    float t = smooth01(0.02f * W, 0.15f * W, ad);
+    float hr = cr + (tr - cr) * t, hg = cg + (tg - cg) * t, hb = cb + (tb - cb) * t;
+    return make_float3(k * (yl * hr + (r - yl * hr) * own), k * (yl * hg + (g - yl * hg) * own),
+                       k * (yl * hb + (b - yl * hb) * own));
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float sc = (float)(p_Height) / 1080.0f, W = (float)(p_Width);
+    float len = stkLen / 100.0f * W, core = 0.06f * W, tail = 0.25f * W;
+    int step = (int)(8.0f * sc + 0.5f);
+    step = step < 1 ? 1 : step;
+    int kx = (int)(len / (float)(step)) + 1;
+    int lo = (int)((float)(step) * 0.5f);
+    float own = stkTint / 100.0f, wd = 1.0f / (float)(step);
+    float ar = 0.0f, ag = 0.0f, ab = 0.0f;
+    for (int i = -kx; i <= kx; i++)
+    {
+        float ad = _fabs((float)(i * step));
+        int q = p_X + i * step;
+        if (ad <= len && q + lo >= 0 && q - lo <= p_Width - 1)
+        {
+            if (q - lo >= 0 && q + lo <= p_Width - 1)
+            {
+                float3 c = streakTap(q, p_Y, ad, 1.0f, len, core, tail, W, own, p_TexR, p_TexG, p_TexB);
+                ar += c.x; ag += c.y; ab += c.z;
+            }
+            else
+            {
+                for (int j = -lo; j <= lo; j++)
+                {
+                    int x = q + j;
+                    if (x >= 0 && x <= p_Width - 1)
+                    {
+                        float e = (2 * lo == step && (j == -lo || j == lo)) ? 0.5f * wd : wd;
+                        float3 c = streakTap(x, p_Y, _fabs((float)(x - p_X)), e, len, core, tail, W, own, p_TexR, p_TexG, p_TexB);
+                        ar += c.x; ag += c.y; ab += c.z;
+                    }
+                }
+            }
+        }
+    }
+    float s = stkAmt / 100.0f * 0.33f * (float)(step) / sc;
+    return make_float3(_fmaxf(ar * s, 0.0f), _fmaxf(ag * s, 0.0f), _fmaxf(ab * s, 0.0f));
+}

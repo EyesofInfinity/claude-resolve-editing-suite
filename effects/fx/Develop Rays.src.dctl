@@ -1,0 +1,78 @@
+// Develop Rays: light rays in one DCTL:
+//   0 Point: volumetric rays streaming from the bright areas away from a centre (Center X, Y), each pixel gathering
+//     the light that lies between it and the centre with a decay
+//   1 Edge: the same from the picture's edges, so outlines throw light
+//   2 Sweep: a band of light crossing the frame at Angle every Period, lighting what is bright under it
+//   3 Puffy: Point rays broken into soft beams by a noise around the centre that slowly turns
+// 40 taps toward the centre; light added in linear. Moves by TIMELINE_FRAME_INDEX: run it as an OpenFX DCTL effect
+// or a DCTL plugin node. MIT License.
+
+DEFINE_UI_PARAMS(ryMode,   Mode,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 3.0, 1.0)
+DEFINE_UI_PARAMS(ryAmount, Rays,        DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ryLength, Length,      DCTLUI_SLIDER_FLOAT, 40.0, 1.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ryThresh, Threshold,   DCTLUI_SLIDER_FLOAT, 65.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ryCX,     Center X,    DCTLUI_SLIDER_FLOAT, 50.0, -50.0, 150.0, 1.0)
+DEFINE_UI_PARAMS(ryCY,     Center Y,    DCTLUI_SLIDER_FLOAT, 20.0, -50.0, 150.0, 1.0)
+DEFINE_UI_PARAMS(ryAngle,  Sweep Angle, DCTLUI_SLIDER_FLOAT, 25.0, 0.0, 180.0, 1.0)
+DEFINE_UI_PARAMS(ryPeriod, Sweep Period, DCTLUI_SLIDER_FLOAT, 2.0, 0.5, 10.0, 0.1)
+DEFINE_UI_PARAMS(ryWarm,   Warmth,      DCTLUI_SLIDER_FLOAT, 30.0, -100.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Mode, "0 Point, 1 Edge, 2 Sweep, 3 Puffy")
+DEFINE_UI_TOOLTIP(Center X, "Where the rays stream from, percent of the frame (outside the frame is allowed)")
+
+#include "../light/light.h"
+#include "../glitch/glitch.h"
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (ryAmount <= 0.0f) return c0;
+    int mode = (int)(ryMode + 0.5f);
+    float amt = ryAmount / 100.0f, thr = ryThresh / 100.0f;
+    float t = (float)(TIMELINE_FRAME_INDEX) / 24.0f;
+    float wr = 1.0f + 0.25f * ryWarm / 100.0f, wb = 1.0f - 0.25f * ryWarm / 100.0f;
+    float r = toLin(c0.x), g = toLin(c0.y), b = toLin(c0.z);
+    float ar = 0.0f, ag = 0.0f, ab = 0.0f, k = 0.0f;
+    if (mode == 2) {
+        float a = ryAngle * 0.0174533f, ca = _cosf(a), sa = _sinf(a);
+        float u = ((float)(x) - 0.5f * (float)(W)) * ca + ((float)(y) - 0.5f * (float)(H)) * sa;
+        float span = 0.5f * (_fabs(ca) * (float)(W) + _fabs(sa) * (float)(H));
+        float pos = (_fmod(t / ryPeriod, 1.0f) * 2.6f - 1.3f) * span;
+        float bw = (0.03f + 0.15f * ryLength / 100.0f) * (float)(H);
+        float band = _expf(-((u - pos) / bw) * ((u - pos) / bw));
+        float L = luma(c0.x, c0.y, c0.z);
+        float lift = band * amt * (0.25f + 1.6f * sstep(thr * 0.5f, 1.0f, L));
+        ar = lift * wr; ag = lift; ab = lift * wb;
+        r = r * (1.0f + ar) + 0.05f * ar; g = g * (1.0f + ag) + 0.05f * ag; b = b * (1.0f + ab) + 0.05f * ab;
+        return lightOut(r, g, b, _saturatef(lift));
+    }
+    float cx = ryCX / 100.0f * (float)(W), cy = ryCY / 100.0f * (float)(H);
+    float dx = cx - (float)(x), dy = cy - (float)(y);
+    float reach = 0.15f + 0.85f * ryLength / 100.0f;
+    float beam = 1.0f;
+    if (mode == 3) {
+        float ang = _atan2f(dy, dx);
+        beam = sstep(0.35f, 0.8f, fbm(3.0f * _cosf(ang) + 50.0f, 3.0f * _sinf(ang) + 50.0f, t * 0.08f, 3, 17u)) * 1.6f;
+    }
+    for (int i = 1; i <= 40; i++) {
+        float f = reach * (float)(i) / 40.0f;
+        int sx = x + (int)(dx * f), sy = y + (int)(dy * f);
+        float3 s = rgbAt(p_TexR, p_TexG, p_TexB, sx, sy, W, H);
+        float src;
+        if (mode == 1) {
+            float e = _fabs(lumaAt(p_TexR, p_TexG, p_TexB, sx + 1, sy, W, H) - lumaAt(p_TexR, p_TexG, p_TexB, sx - 1, sy, W, H))
+                    + _fabs(lumaAt(p_TexR, p_TexG, p_TexB, sx, sy + 1, W, H) - lumaAt(p_TexR, p_TexG, p_TexB, sx, sy - 1, W, H));
+            src = sstep(0.03f, 0.3f, e) * (0.4f + luma(s.x, s.y, s.z));
+        } else {
+            src = _fmaxf(luma(s.x, s.y, s.z) - thr, 0.0f) / _fmaxf(1.0f - thr, 0.05f);
+        }
+        float dec = _expf(-2.2f * (float)(i) / 40.0f);
+        ar += src * dec * (toLin(s.x) * 0.6f + 0.4f); ag += src * dec * (toLin(s.y) * 0.6f + 0.4f); ab += src * dec * (toLin(s.z) * 0.6f + 0.4f);
+    }
+    float gain = 0.12f * amt * beam;
+    ar *= gain * wr; ag *= gain; ab *= gain * wb;
+    r += ar; g += ag; b += ab;
+    k = _saturatef(ar + ag + ab);
+    return lightOut(r, g, b, k);
+}

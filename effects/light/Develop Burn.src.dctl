@@ -1,0 +1,38 @@
+// Develop Burn: film burning through the picture. A warped heat field runs from the cool edge colour of the palette through its body to a hot core that
+// blows to white; the picture survives under the cool parts by Show Picture; grain and dust ride on the burnt
+// film. Burn 100 covers the frame as real burn frames do. Burn Speed sets how fast the pattern changes:
+// 100 is a new pattern every frame, as in a real burn. Run it as an OpenFX DCTL effect on a clip or an adjustment
+// clip, or as a DCTL plugin node (TIMELINE_FRAME_INDEX moves it). MIT License.
+
+DEFINE_UI_PARAMS(bnAmount,  Burn,             DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bnPalette, Burn Palette,     DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 3.0, 1.0)
+DEFINE_UI_PARAMS(bnHeat,    Burn Heat,        DCTLUI_SLIDER_FLOAT, 55.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bnScale,   Burn Size,        DCTLUI_SLIDER_FLOAT, 55.0, 10.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bnSpeed,   Burn Speed,       DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bnShow,    Burn Show Picture, DCTLUI_SLIDER_FLOAT, 15.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bnGrain,   Burn Grain,       DCTLUI_SLIDER_FLOAT, 45.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bnDust,    Burn Dust,        DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bnSeed,    Burn Seed,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Burn, "Share of the frame burnt: 100 is the whole frame")
+DEFINE_UI_TOOLTIP(Burn Palette, "0 Violet Burn, 1 Classic warm, 2 Lucid, 3 Night blue")
+DEFINE_UI_TOOLTIP(Burn Speed, "100 is a new burn every frame; low values drift slowly")
+DEFINE_UI_TOOLTIP(Burn Heat, "0 a young violet burn, 100 an old orange one; a real burn runs violet then orange")
+
+#include "light.h"
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float r = toLin(_tex2D(p_TexR, p_X, p_Y)), g = toLin(_tex2D(p_TexG, p_X, p_Y)), b = toLin(_tex2D(p_TexB, p_X, p_Y));
+    if (bnAmount <= 0.0f) return make_float3(toDisp(r), toDisp(g), toDisp(b));
+    float hh = (float)(p_Height), aspect = (float)(p_Width) / hh;
+    float x = ((float)(p_X) + 0.5f) / hh, y = ((float)(p_Y) + 0.5f) / hh;
+    uint s = (uint)(bnSeed) * 101u + 7u;
+    float f = (float)(TIMELINE_FRAME_INDEX);
+    float z = f * (0.01f + 0.99f * bnSpeed / 100.0f * bnSpeed / 100.0f) + bnSeed * 1.3f;
+    float sc = 0.15f + 0.9f * bnScale / 100.0f;
+    float age = _saturatef(bnHeat / 100.0f + 0.35f * (hash01((uint)(z + 1000.0f), s, 73u) - 0.5f));
+    float4 o = burnOver(r, g, b, x, y, aspect, p_X, p_Y, p_Height, bnAmount / 100.0f, bnPalette, age, sc,
+                        bnShow / 100.0f, bnGrain / 100.0f, bnDust / 100.0f, z, (uint)(TIMELINE_FRAME_INDEX), s);
+    return lightOut(o.x, o.y, o.z, o.w);
+}

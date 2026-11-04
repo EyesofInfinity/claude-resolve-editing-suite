@@ -1,0 +1,1309 @@
+--[[ Develop Diffusion as a Fusion Fuse: the transform DCTL effects/diffusion/build/Develop Diffusion.dctl run on the GPU through DVIPComputeNode,
+every pixel calling the DCTL's own main function with the DCTL's own controls. Written by
+effects/fusegen/fusegen.py; regenerate it, never edit it. The picture is read and written in the values
+the DCTL sees in Resolve (Rec.709 gamma 2.4 display values in Develop), with no conversion.
+Frame Offset adds to the comp frame for the DCTL's frame value; Hold Frame uses Frame Offset alone.
+If the kernel cannot run, the output is solid magenta and the reason is in the Fusion console, in the
+tool's data DevelopFuse.Status and in %TEMP%\DevelopFuse.log. MIT License. ]]
+
+FuRegisterClass("DevelopDiffusion", CT_Tool, {
+	REGS_Category = "Fuses\\Develop",
+	REGS_OpIconString = "DD",
+	REGS_OpDescription = "Develop Diffusion (Develop DCTL in a Fuse)",
+	REG_NoObjMatCtrls = true,
+	REG_NoMotionBlurCtrls = true,
+	})
+
+DvName = "Develop Diffusion"
+DvKind = "transform"
+DvDctl = "diffusion/build/Develop Diffusion.dctl"
+
+-- the DCTL slider steps, for the record and the inverse mapping (Fusion sliders have no step)
+DvSteps = { dfAmount = 1.0, dfMode = 1.0, dfStrength = 1.0, dfSize = 1.0, dfThresh = 1.0, dfHigh = 1.0, dfWarm = 1.0, dfColour = 1.0, dfAngle = 1.0, dfX = 1.0, dfY = 1.0, dfSpot = 1.0, dfSoft = 1.0, dfDepth = 1.0, dfDensity = 1.0, dfSpeed = 1.0, dfSeed = 1.0 }
+
+-- this Fuse's own C names for its kernels and parameter structs (never shared with another Fuse)
+DvKernelName = "DevelopDiffusionKa6e83a75"
+DvParamsName = "DevelopDiffusionPa6e83a75"
+DvSplitName = "DevelopDiffusionSa6e83a75"
+DvSplitParamsName = "DevelopDiffusionSPa6e83a75"
+
+DvParams = [[
+	float dfAmount;
+	float dfMode;
+	float dfStrength;
+	float dfSize;
+	float dfThresh;
+	float dfHigh;
+	float dfWarm;
+	float dfColour;
+	float dfAngle;
+	float dfX;
+	float dfY;
+	float dfSpot;
+	float dfSoft;
+	float dfDepth;
+	float dfDensity;
+	float dfSpeed;
+	float dfSeed;
+	float dvProgress;
+	int dvFrame;
+	int dvFlipY;
+	int dvSize[2];
+]]
+
+DvSplitParams = [[
+	int ch;
+	int flipY;
+	int size[2];
+]]
+
+DvSplitSource = [[
+// one channel of an image as its own texture (the channel in every component), rows turned top-down when
+// flipY is set, so a DCTL's _tex2D(plane, x, y) reads what Resolve hands it
+__KERNEL__ void DevelopDiffusionSa6e83a75(__CONSTANTREF__ DevelopDiffusionSPa6e83a75 *params, __TEXTURE2D__ src, __TEXTURE2D_WRITE__ dst)
+{
+    DEFINE_KERNEL_ITERATORS_XY(x, y)
+    if (x < params->size[0] && y < params->size[1])
+    {
+        int sy = params->flipY != 0 ? params->size[1] - 1 - y : y;
+        float4 c = _tex2DVec4(src, x, sy);
+        float v = params->ch == 0 ? c.x : (params->ch == 1 ? c.y : (params->ch == 2 ? c.z : c.w));
+        _tex2DVec4Write(dst, x, y, to_float4(v, v, v, v));
+    }
+}
+]]
+
+DvMath = [[
+// fusegen dctl math (README section 2): the argument casts Resolve gives a DCTL on OpenCL and Metal
+#if !defined(KERNEL_TYPE_IS_DCTL) && defined(DEVICE_IS_OPENCL)
+#undef _fabs
+#define _fabs(_A) fabs((float)(_A))
+#undef _powf
+#define _powf(_A, _B) native_powr((float)(_A), (float)(_B))
+#undef _logf
+#define _logf(_A) native_log((float)(_A))
+#undef _log2f
+#define _log2f(_A) native_log2((float)(_A))
+#undef _log10f
+#define _log10f(_A) native_log10((float)(_A))
+#undef _expf
+#define _expf(_A) native_exp((float)(_A))
+#undef _exp2f
+#define _exp2f(_A) native_exp2((float)(_A))
+#undef _exp10f
+#define _exp10f(_A) native_exp10((float)(_A))
+#undef _copysignf
+#define _copysignf(_A, _B) copysign((float)(_A), (float)(_B))
+#undef _fmaxf
+#define _fmaxf(_A, _B) fmax((float)(_A), (float)(_B))
+#undef _fminf
+#define _fminf(_A, _B) fmin((float)(_A), (float)(_B))
+#undef _clampf
+#define _clampf(_A, _B, _C) clamp((float)(_A), (float)(_B), (float)(_C))
+#undef _sqrtf
+#define _sqrtf(_A) native_sqrt((float)(_A))
+#undef _ceilf
+#define _ceilf(_A) ceil((float)(_A))
+#undef _floorf
+#define _floorf(_A) floor((float)(_A))
+#undef _fmod
+#define _fmod(_A, _B) fmod((float)(_A), (float)(_B))
+#undef _round
+#define _round(_A) round((float)(_A))
+#undef _atan2f
+#define _atan2f(_A, _B) atan2((float)(_A), (float)(_B))
+#undef _sinf
+#define _sinf(_A) native_sin((float)(_A))
+#undef _cosf
+#define _cosf(_A) native_cos((float)(_A))
+#undef _tanf
+#define _tanf(_A) native_tan((float)(_A))
+#undef _acosf
+#define _acosf(_A) acos((float)(_A))
+#undef _asinf
+#define _asinf(_A) asin((float)(_A))
+#undef _sinpif
+#define _sinpif(_A) sinpi((float)(_A))
+#undef _cospif
+#define _cospif(_A) cospi((float)(_A))
+#undef _acoshf
+#define _acoshf(_A) acosh((float)(_A))
+#undef _asinhf
+#define _asinhf(_A) asinh((float)(_A))
+#undef _atanhf
+#define _atanhf(_A) atanh((float)(_A))
+#undef _coshf
+#define _coshf(_A) cosh((float)(_A))
+#undef _sinhf
+#define _sinhf(_A) sinh((float)(_A))
+#undef _tanhf
+#define _tanhf(_A) tanh((float)(_A))
+#undef _truncf
+#define _truncf(_A) trunc((float)(_A))
+#undef _fdimf
+#define _fdimf(_A, _B) fdim((float)(_A), (float)(_B))
+#undef _fmaf
+#define _fmaf(_A, _B, _C) fma((float)(_A), (float)(_B), (float)(_C))
+#undef _rsqrtf
+#define _rsqrtf(_A) rsqrt((float)(_A))
+#undef _saturatef
+#define _saturatef(_A) clamp((float)(_A), 0.0f, 1.0f)
+#undef _hypotf
+#define _hypotf(_A, _B) hypot((float)(_A), (float)(_B))
+#elif !defined(KERNEL_TYPE_IS_DCTL) && defined(DEVICE_IS_METAL)
+#undef _fabs
+#define _fabs(_A) fabs((float)(_A))
+#undef _powf
+#define _powf(_A, _B) pow((float)(_A), (float)(_B))
+#undef _logf
+#define _logf(_A) log((float)(_A))
+#undef _log2f
+#define _log2f(_A) log2((float)(_A))
+#undef _log10f
+#define _log10f(_A) log10((float)(_A))
+#undef _expf
+#define _expf(_A) exp((float)(_A))
+#undef _exp2f
+#define _exp2f(_A) exp2((float)(_A))
+#undef _exp10f
+#define _exp10f(_A) exp10((float)(_A))
+#undef _copysignf
+#define _copysignf(_A, _B) copysign((float)(_A), (float)(_B))
+#undef _fmaxf
+#define _fmaxf(_A, _B) fmax((float)(_A), (float)(_B))
+#undef _fminf
+#define _fminf(_A, _B) fmin((float)(_A), (float)(_B))
+#undef _clampf
+#define _clampf(_A, _B, _C) clamp((float)(_A), (float)(_B), (float)(_C))
+#undef _sqrtf
+#define _sqrtf(_A) sqrt((float)(_A))
+#undef _ceilf
+#define _ceilf(_A) ceil((float)(_A))
+#undef _floorf
+#define _floorf(_A) floor((float)(_A))
+#undef _fmod
+#define _fmod(_A, _B) fmod((float)(_A), (float)(_B))
+#undef _round
+#define _round(_A) round((float)(_A))
+#undef _atan2f
+#define _atan2f(_A, _B) atan2((float)(_A), (float)(_B))
+#undef _sinf
+#define _sinf(_A) sin((float)(_A))
+#undef _cosf
+#define _cosf(_A) cos((float)(_A))
+#undef _tanf
+#define _tanf(_A) tan((float)(_A))
+#undef _acosf
+#define _acosf(_A) acos((float)(_A))
+#undef _asinf
+#define _asinf(_A) asin((float)(_A))
+#undef _sinpif
+#define _sinpif(_A) sinpi((float)(_A))
+#undef _cospif
+#define _cospif(_A) cospi((float)(_A))
+#undef _acoshf
+#define _acoshf(_A) acosh((float)(_A))
+#undef _asinhf
+#define _asinhf(_A) asinh((float)(_A))
+#undef _atanhf
+#define _atanhf(_A) atanh((float)(_A))
+#undef _coshf
+#define _coshf(_A) cosh((float)(_A))
+#undef _sinhf
+#define _sinhf(_A) sinh((float)(_A))
+#undef _tanhf
+#define _tanhf(_A) tanh((float)(_A))
+#undef _truncf
+#define _truncf(_A) trunc((float)(_A))
+#undef _fdimf
+#define _fdimf(_A, _B) fdim((float)(_A), (float)(_B))
+#undef _fmaf
+#define _fmaf(_A, _B, _C) fma((float)(_A), (float)(_B), (float)(_C))
+#undef _rsqrtf
+#define _rsqrtf(_A) rsqrt((float)(_A))
+#undef _saturatef
+#define _saturatef(_A) saturate((float)(_A))
+#undef _hypotf
+#define _hypotf(_A, _B) sqrt((float)(_A) * (float)(_A) + (float)(_B) * (float)(_B))
+#endif
+]]
+
+DvMapping = [[
+// fusegen mapping (effects/fusegen/README.md section 2): a DCTL reads one channel with _tex2D(plane, x, y);
+// here each plane is a texture holding that channel, read at whole-pixel coordinates by the default sampler
+#define dvTex2D(dv_t, dv_x, dv_y) (_tex2DVec4((dv_t), (dv_x), (dv_y)).x)
+]]
+
+DvCompat = [[
+// fusegen compatibility, used only when the plain source does not build: Resolve's DCTL names for the vector
+// constructors, over Fusion's own
+#ifndef make_float2
+#define make_float2(a, b) to_float2((a), (b))
+#endif
+#ifndef make_float3
+#define make_float3(a, b, c) to_float3((a), (b), (c))
+#endif
+#ifndef make_float4
+#define make_float4(a, b, c, d) to_float4((a), (b), (c), (d))
+#endif
+]]
+
+DvKernelText = [[
+// Develop Diffusion: diffusion filters and atmosphere in one transform DCTL. Each is built from the glass, the
+// fabric, the film or the
+// air, with the light scattered in linear (Rec.709 gamma 2.4) and the clipped highlights given back the brightness the
+// camera could not hold (Highlights), so they bloom as a real filter blooms a light far brighter than white:
+//   0 Black Mist: a black mist filter. A small share of all light scatters (the black specks absorb rather than veil,
+//     so shadows lift only a little); the highlights' light scatters with a steep power-law halo, bright near the
+//     light and falling far out.
+//   1 Diffusion: a white mist or diffusion filter: more of all light scattered, wider, so shadows go milky and
+//     contrast drops, the highlights glowing broadly.
+//   2 Fog: a fog filter. A wide veil of the picture's own light lifts the blacks (a fog filter does, a mist filter
+//     barely), the highlights glow out far, and detail softens a little.
+//   3 Double Fog: twice the veil with the definition kept: the halo is tight and most of the scatter goes into the
+//     veil. Depth thickens it toward the top of the frame, where the distance usually is.
+//   4 Frost: frosted glass: a gaussian scatter of moderate width, the scattered light pale and a little cool.
+//   5 Soft Focus: a soft focus lens. Its spherical aberration lays an out-of-focus disc of each point under the sharp
+//     image (Softness the disc's edge), so the picture keeps its lines and glows.
+//   6 Net: a net stocking behind the lens. The weave diffracts every light into a soft cross along the threads
+//     (Angle), the colours parting toward the tips (Colour); the rest of the picture softens a very little.
+//   7 Silk: a silk stocking. A short scatter fills fine dark texture with the light around it while edges keep their
+//     sharp core; the weave sprays a faint six-point sheen off the highlights; the light a touch ivory.
+//   8 Center Spot: a centre spot filter: clear glass at Position (Spot its size, Softness its edge), a soft focus and
+//     glow around it.
+//   9 Halo: a corona round each light, as thin cloud of droplets of one size throws round the moon: a soft bright
+//     ring (Size), red outside and blue inside (Colour), an aureole within.
+//   10 Atmospheric Glow: forward scattering in hazy air. The lights throw a long aureole, a haze of the scene's own
+//     light lifts and pales the frame, warmed by Warmth; Depth thickens it toward the top.
+//   11 Film Glow: film's halation and bloom. Light that passed the emulsion reflects off the base and comes back as a
+//     tight red-orange fringe round every highlight (Colour how red), with a soft bloom of the light over it.
+//   12 Smoke and Fog: a slow drifting bank of smoke and fog over the picture (Density, Speed, Angle the drift, Depth
+//     how low it pools), two layers at two depths, billowing as it moves, lit by the scene's own light around it.
+// Modes 0 to 11 hold still, as a filter on a lens does; Smoke and Fog moves by dvFrame. An OpenFX DCTL
+// effect or a DCTL plugin node. Amount mixes with the picture in display terms; Amount 0 or Strength 0 is the input
+// exactly. MIT License.
+
+// fusegen ui: dfAmount
+// fusegen ui: dfMode
+// fusegen ui: dfStrength
+// fusegen ui: dfSize
+// fusegen ui: dfThresh
+// fusegen ui: dfHigh
+// fusegen ui: dfWarm
+// fusegen ui: dfColour
+// fusegen ui: dfAngle
+// fusegen ui: dfX
+// fusegen ui: dfY
+// fusegen ui: dfSpot
+// fusegen ui: dfSoft
+// fusegen ui: dfDepth
+// fusegen ui: dfDensity
+// fusegen ui: dfSpeed
+// fusegen ui: dfSeed
+
+// fusegen tip: Mode
+// fusegen tip: Strength
+// fusegen tip: Size
+// fusegen tip: Threshold
+// fusegen tip: Highlights
+// fusegen tip: Warmth
+// fusegen tip: Colour
+// fusegen tip: Angle
+// fusegen tip: Spot
+// fusegen tip: Softness
+// fusegen tip: Depth
+// fusegen tip: Density
+
+// Develop diffusion: shared code of Develop Diffusion, on top of lens.h (mirrored edges, linear light, the
+// hash and value noise). Every wide gather here reads stratified rings of taps: each ring is turned by its own angle
+// and the whole set of rings is turned and slid outward per pixel, so what a finite set of taps leaves behind is a
+// fine grain and never a ring, a ladder or a ghost copy. MIT License.
+
+// Develop lens: shared code of Develop Bokeh and Develop Lens, on top of light.h and glitch.h. Bilinear sampling
+// with mirrored edges, linear light (Rec.709 gamma 2.4). MIT License.
+
+// Develop light: the shared code of Develop Leak, Develop Burn and Develop Light Dissolve.
+// build.py writes it into each effect, so every installed .dctl stands alone. Rec.709 gamma 2.4 in and out;
+// light is added in linear. Coordinates are in frame heights (y 0 to 1 top to bottom, x 0 to width/height),
+// so a leak keeps its shape at any resolution and aspect. MIT License.
+
+__DEVICE__ float toLin(float x) { return _powf(_fmaxf(x, 0.0f), 2.4f); }
+__DEVICE__ float toDisp(float x) { return _powf(_fmaxf(x, 0.0f), 1.0f / 2.4f); }
+__DEVICE__ float luma(float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; }
+__DEVICE__ float lerp1(float a, float b, float t) { return a + (b - a) * t; }
+__DEVICE__ float sstep(float a, float b, float x) { float t = _saturatef((x - a) / (b - a)); return t * t * (3.0f - 2.0f * t); }
+
+__DEVICE__ float3 shoulder(float r, float g, float b)
+{
+    float m = _fmaxf(r, _fmaxf(g, b));
+    if (m <= 0.8f) return make_float3(r, g, b);
+    float nm = 0.8f + 0.2f * _tanhf((m - 0.8f) / 0.2f);
+    float k = nm / m, w = 0.6f * sstep(1.0f, 3.0f, m);
+    return make_float3(lerp1(r * k, nm, w), lerp1(g * k, nm, w), lerp1(b * k, nm, w));
+}
+
+__DEVICE__ float3 lightOut(float r, float g, float b, float k)
+{
+    float3 s = shoulder(r, g, b);
+    float w = _saturatef(k * 4.0f);
+    return make_float3(_saturatef(toDisp(lerp1(r, s.x, w))), _saturatef(toDisp(lerp1(g, s.y, w))), _saturatef(toDisp(lerp1(b, s.z, w))));
+}
+
+__DEVICE__ float hash01(uint x, uint y, uint z)
+{
+    x = x * 1664525u + 1013904223u; y = y * 1664525u + 1013904223u; z = z * 1664525u + 1013904223u;
+    x += y * z; y += z * x; z += x * y;
+    x ^= x >> 16u; y ^= y >> 16u; z ^= z >> 16u;
+    x += y * z; y += z * x; z += x * y;
+    return (float)(x >> 8u) * (1.0f / 16777216.0f);
+}
+
+__DEVICE__ float fade(float t) { return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f); }
+
+__DEVICE__ float vnoise3(float x, float y, float z, uint s)
+{
+    int ix = (int)(x), iy = (int)(y), iz = (int)(z);
+    float tx = fade(x - (float)(ix)), ty = fade(y - (float)(iy)), tz = fade(z - (float)(iz));
+    uint x0 = (uint)(ix), y0 = (uint)(iy), z0 = (uint)(iz) + s * 7919u;
+    float a0 = lerp1(lerp1(hash01(x0, y0, z0), hash01(x0 + 1u, y0, z0), tx), lerp1(hash01(x0, y0 + 1u, z0), hash01(x0 + 1u, y0 + 1u, z0), tx), ty);
+    float a1 = lerp1(lerp1(hash01(x0, y0, z0 + 1u), hash01(x0 + 1u, y0, z0 + 1u), tx), lerp1(hash01(x0, y0 + 1u, z0 + 1u), hash01(x0 + 1u, y0 + 1u, z0 + 1u), tx), ty);
+    return lerp1(a0, a1, tz);
+}
+
+__DEVICE__ float fbm(float x, float y, float z, int n, uint s)
+{
+    float sum = 0.0f, amp = 0.5f, tot = 0.0f, f = 1.0f;
+    for (int i = 0; i < 5; i++) {
+        if (i >= n) break;
+        sum += amp * vnoise3(x * f + 4096.0f + 37.1f * (float)(i), y * f + 4096.0f + 11.7f * (float)(i), z * f + 4096.0f, s + (uint)(i));
+        tot += amp; amp *= 0.5f; f *= 2.03f;
+    }
+    float v = sum / tot;
+    return _saturatef((v - 0.5f) * 1.6f + 0.5f);
+}
+
+__DEVICE__ float3 ramp(float pal, float t, float age)
+{
+    int p = (int)(pal + 0.5f);
+    float c0r = 0.30f, c0g = 0.10f, c0b = 0.42f, c1r = 0.62f, c1g = 0.35f, c1b = 0.47f, c2r = 0.86f, c2g = 0.76f, c2b = 0.68f;
+    float h0r = 0.73f, h0g = 0.16f, h0b = 0.26f, h1r = 0.89f, h1g = 0.35f, h1b = 0.17f, h2r = 0.94f, h2g = 0.50f, h2b = 0.22f;
+    if (p == 1) {
+        c0r = 0.45f; c0g = 0.08f; c0b = 0.05f; c1r = 0.85f; c1g = 0.30f; c1b = 0.08f; c2r = 0.98f; c2g = 0.70f; c2b = 0.35f;
+        h0r = 0.80f; h0g = 0.20f; h0b = 0.04f; h1r = 0.98f; h1g = 0.55f; h1b = 0.12f; h2r = 1.00f; h2g = 0.85f; h2b = 0.55f;
+    }
+    if (p == 2) {
+        c0r = 0.18f; c0g = 0.10f; c0b = 0.45f; c1r = 0.65f; c1g = 0.25f; c1b = 0.65f; c2r = 0.95f; c2g = 0.70f; c2b = 0.75f;
+        h0r = 0.70f; h0g = 0.15f; h0b = 0.50f; h1r = 0.95f; h1g = 0.45f; h1b = 0.45f; h2r = 1.00f; h2g = 0.75f; h2b = 0.55f;
+    }
+    if (p == 3) {
+        c0r = 0.05f; c0g = 0.10f; c0b = 0.35f; c1r = 0.15f; c1g = 0.40f; c1b = 0.75f; c2r = 0.70f; c2g = 0.85f; c2b = 0.98f;
+        h0r = 0.10f; h0g = 0.25f; h0b = 0.60f; h1r = 0.35f; h1g = 0.65f; h1b = 0.95f; h2r = 0.85f; h2g = 0.95f; h2b = 1.00f;
+    }
+    float a = _saturatef(age);
+    float r0 = lerp1(c0r, h0r, a), g0 = lerp1(c0g, h0g, a), b0 = lerp1(c0b, h0b, a);
+    float r1 = lerp1(c1r, h1r, a), g1 = lerp1(c1g, h1g, a), b1 = lerp1(c1b, h1b, a);
+    float r2 = lerp1(c2r, h2r, a), g2 = lerp1(c2g, h2g, a), b2 = lerp1(c2b, h2b, a);
+    float u = _saturatef(t);
+    float r, g, b;
+    if (u < 0.5f) { float k = u * 2.0f; r = lerp1(r0, r1, k); g = lerp1(g0, g1, k); b = lerp1(b0, b1, k); }
+    else { float k = u * 2.0f - 1.0f; r = lerp1(r1, r2, k); g = lerp1(g1, g2, k); b = lerp1(b1, b2, k); }
+    float hot = sstep(1.0f, 1.4f, t);
+    return make_float3(toLin(lerp1(r, 1.0f, hot)), toLin(lerp1(g, 0.96f, hot)), toLin(lerp1(b, 0.90f, hot)));
+}
+
+__DEVICE__ float leakField(float x, float y, float aspect, float deg, float w, float sc, float z, uint s)
+{
+    float a = deg * 0.0174533f, ca = _cosf(a), sa = _sinf(a);
+    float ext = 0.5f * (_fabs(ca) * aspect + _fabs(sa));
+    float sproj = (x - 0.5f * aspect) * ca + (y - 0.5f) * sa;
+    float warp = fbm(x * 1.3f, y * 1.3f, z * 0.35f, 2, s + 40u) - 0.5f;
+    float d = _fmaxf(ext - sproj + 0.45f * warp * w * aspect, 0.0f);
+    float reach = _fmaxf(w * aspect, 0.02f);
+    float e = _expf(-(d / reach) * (d / reach));
+    float cloud = fbm(x / sc, y / sc, z, 3, s);
+    return _saturatef(e * (0.35f + 1.3f * cloud));
+}
+
+__DEVICE__ float burnHeat(float x, float y, float cover, float sc, float z, uint s)
+{
+    float wx = fbm(x / sc * 0.7f, y / sc * 0.7f, z * 0.6f, 2, s + 90u) - 0.5f;
+    float wy = fbm(x / sc * 0.7f + 31.0f, y / sc * 0.7f, z * 0.6f, 2, s + 91u) - 0.5f;
+    float h = fbm((x + 0.6f * wx) / sc, (y + 0.6f * wy) / sc, z, 4, s);
+    float th = 1.0f - cover;
+    return _saturatef((h - th + 0.28f) / 0.62f);
+}
+
+__DEVICE__ float dust(int px, int py, int h, float amount, uint z)
+{
+    float sc = (float)(h) / 1080.0f;
+    int cx = (int)((float)(px) / (2.5f * sc)), cy = (int)((float)(py) / (2.5f * sc));
+    float r = hash01((uint)(cx), (uint)(cy), z * 13u + 5u);
+    float lim = 0.00002f * amount;
+    if (r > lim) return 0.0f;
+    return hash01((uint)(cx), (uint)(cy), z * 13u + 6u) < 0.6f ? -1.0f : 1.0f;
+}
+
+__DEVICE__ float4 burnOver(float r, float g, float b, float x, float y, float aspect, int px, int py, int ph,
+                           float cover, float pal, float age, float sc, float show, float grain, float dst,
+                           float z, uint fz, uint s)
+{
+    float k = sstep(0.0f, 0.35f, burnHeat(x, y, cover, sc, z, s));
+    uint zi = (uint)(z + 1000.0f);
+    float ang = 6.2831853f * ((float)(zi % 1000u) * 0.37f + 0.25f * hash01(zi, s, 71u));
+    float ca = _cosf(ang), sa = _sinf(ang), ext = 0.5f * (_fabs(ca) * aspect + _fabs(sa));
+    float band = 0.5f + 0.5f * ((x - 0.5f * aspect) * ca + (y - 0.5f) * sa) / ext;
+    float cl = fbm(x / (sc * 1.6f), y / (sc * 1.6f), z, 3, s + 200u);
+    float t = 0.05f + 0.95f * _saturatef(0.8f * band + 0.95f * (cl - 0.5f) + 0.15f);
+    float3 c = ramp(pal, t, age);
+    float keep = lerp1(1.0f, show, k);
+    float gr = 1.0f + grain * 0.22f * (hash01((uint)(px), (uint)(py), fz * 3u + s) - 0.5f) * k;
+    float d = dust(px, py, ph, dst * 100.0f, fz + s) * k;
+    float rr = (r * keep + c.x * k) * gr, gg = (g * keep + c.y * k) * gr, bb = (b * keep + c.z * k) * gr;
+    if (d < 0.0f) { rr *= 0.15f; gg *= 0.12f; bb *= 0.12f; }
+    if (d > 0.0f) { rr = rr + 0.6f; gg = gg + 0.55f; bb = bb + 0.45f; }
+    return make_float4(rr, gg, bb, k);
+}
+// Develop glitch: shared code of the glitch effects, on top of light.h's hash and helpers. MIT License.
+
+__DEVICE__ int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+__DEVICE__ float3 rgbAt(__TEXTURE2D__ tr, __TEXTURE2D__ tg, __TEXTURE2D__ tb, int x, int y, int w, int h)
+{
+    int cx = clampi(x, 0, w - 1), cy = clampi(y, 0, h - 1);
+    return make_float3(dvTex2D(tr, cx, cy), dvTex2D(tg, cx, cy), dvTex2D(tb, cx, cy));
+}
+
+__DEVICE__ float lumaAt(__TEXTURE2D__ tr, __TEXTURE2D__ tg, __TEXTURE2D__ tb, int x, int y, int w, int h)
+{
+    float3 c = rgbAt(tr, tg, tb, x, y, w, h);
+    return luma(c.x, c.y, c.z);
+}
+
+__DEVICE__ float rnd3(int a, int b, uint c) { return hash01((uint)(a + 65536), (uint)(b + 65536), c); }
+
+__DEVICE__ float bayer8(int cx, int cy)
+{
+    int bx = cx & 7, by = cy & 7, xr = bx ^ by;
+    int v = ((xr & 1) << 5) | ((by & 1) << 4) | ((xr & 2) << 2) | ((by & 2) << 1) | ((xr & 4) >> 1) | ((by & 4) >> 2);
+    return ((float)(v) + 0.5f) / 64.0f;
+}
+
+__DEVICE__ float3 gritFinish(float3 c, int x, int y, int h, float g, float grit, float dith, uint seed)
+{
+    if (g <= 0.0f) return c;
+    float L = luma(c.x, c.y, c.z);
+    float n = hash01((uint)(x + 65536), (uint)(y + 65536), seed) - 0.5f;
+    float gr = grit * g * 0.16f * (0.35f + 0.65f * L) * n;
+    float r = c.x + gr, gg = c.y + gr, b = c.z + gr;
+    float d = dith * g;
+    if (d > 0.0f) {
+        int cell = (int)(2.0f * (float)(h) / 1080.0f + 0.5f);
+        if (cell < 1) cell = 1;
+        float t = bayer8((int)(x / cell), (int)(y / cell));
+        float lv = 32.0f * (1.0f - d) + 3.0f * d - 1.0f;
+        r = _floorf(_saturatef(r) * lv + t) / lv; gg = _floorf(_saturatef(gg) * lv + t) / lv; b = _floorf(_saturatef(b) * lv + t) / lv;
+    }
+    return make_float3(_saturatef(r), _saturatef(gg), _saturatef(b));
+}
+
+__DEVICE__ float3 chromaBleed(__TEXTURE2D__ tr, __TEXTURE2D__ tg, __TEXTURE2D__ tb, float3 c, int x, int y, int w, int h, int k)
+{
+    if (k < 1) return c;
+    float3 a = rgbAt(tr, tg, tb, x - k, y, w, h), b = rgbAt(tr, tg, tb, x - (int)(k / 2), y, w, h);
+    float3 m = make_float3((a.x + b.x + c.x) / 3.0f, (a.y + b.y + c.y) / 3.0f, (a.z + b.z + c.z) / 3.0f);
+    float L = luma(c.x, c.y, c.z), Lm = luma(m.x, m.y, m.z);
+    return make_float3(m.x - Lm + L, m.y - Lm + L, m.z - Lm + L);
+}
+
+__DEVICE__ int mirL(int i, int n)
+{
+    int q = 2 * n, m = i % q;
+    if (m < 0) m += q;
+    if (m >= n) m = q - 1 - m;
+    return clampi(m, 0, n - 1);
+}
+
+__DEVICE__ float3 bilL(__TEXTURE2D__ tr, __TEXTURE2D__ tg, __TEXTURE2D__ tb, float fx, float fy, int w, int h)
+{
+    float bx = _floorf(fx), by = _floorf(fy);
+    float ax = fx - bx, ay = fy - by;
+    int x0 = (int)(bx), y0 = (int)(by);
+    int xa = mirL(x0, w), xb = mirL(x0 + 1, w), ya = mirL(y0, h), yb = mirL(y0 + 1, h);
+    float3 c00 = make_float3(dvTex2D(tr, xa, ya), dvTex2D(tg, xa, ya), dvTex2D(tb, xa, ya));
+    if (ax == 0.0f && ay == 0.0f) return c00;
+    float3 c10 = make_float3(dvTex2D(tr, xb, ya), dvTex2D(tg, xb, ya), dvTex2D(tb, xb, ya));
+    float3 c01 = make_float3(dvTex2D(tr, xa, yb), dvTex2D(tg, xa, yb), dvTex2D(tb, xa, yb));
+    float3 c11 = make_float3(dvTex2D(tr, xb, yb), dvTex2D(tg, xb, yb), dvTex2D(tb, xb, yb));
+    return make_float3(lerp1(lerp1(c00.x, c10.x, ax), lerp1(c01.x, c11.x, ax), ay),
+                       lerp1(lerp1(c00.y, c10.y, ax), lerp1(c01.y, c11.y, ax), ay),
+                       lerp1(lerp1(c00.z, c10.z, ax), lerp1(c01.z, c11.z, ax), ay));
+}
+
+__DEVICE__ float3 linL(__TEXTURE2D__ tr, __TEXTURE2D__ tg, __TEXTURE2D__ tb, float fx, float fy, int w, int h)
+{
+    float3 c = bilL(tr, tg, tb, fx, fy, w, h);
+    return make_float3(toLin(c.x), toLin(c.y), toLin(c.z));
+}
+
+__DEVICE__ float aperture(float a, float n, float rot, float rnd)
+{
+    if (n < 3.0f) return 1.0f;
+    float seg = 6.2831853f / n;
+    float t = a - rot;
+    float m = t - seg * _floorf(t / seg) - 0.5f * seg;
+    float poly = _cosf(0.5f * seg) / _cosf(m);
+    return lerp1(poly, 1.0f, rnd);
+}
+
+__DEVICE__ float3 specL(float t)
+{
+    float a = 6.2831853f * t;
+    float r = 0.5f + 0.5f * _cosf(a), g = 0.5f + 0.5f * _cosf(a - 2.0943951f), b = 0.5f + 0.5f * _cosf(a - 4.1887902f);
+    return make_float3(r * r * r, g * g * g, b * b * b);
+}
+
+__DEVICE__ float ignD(float x, float y)
+{
+    float f = 0.06711056f * x + 0.00583715f * y;
+    f = f - _floorf(f);
+    f = 52.9829189f * f;
+    return f - _floorf(f);
+}
+
+__DEVICE__ float4 tapD(__TEXTURE2D__ tr, __TEXTURE2D__ tg, __TEXTURE2D__ tb, float fx, float fy, float pre, int w, int h)
+{
+    float bx = _floorf(fx), by = _floorf(fy);
+    float ax = fx - bx, ay = fy - by;
+    int x0 = (int)(bx), y0 = (int)(by);
+    int xa = mirL(x0, w), xb = mirL(x0 + 1, w), ya = mirL(y0, h), yb = mirL(y0 + 1, h);
+    float g00 = _saturatef(dvTex2D(tg, xa, ya)), g10 = _saturatef(dvTex2D(tg, xb, ya));
+    float g01 = _saturatef(dvTex2D(tg, xa, yb)), g11 = _saturatef(dvTex2D(tg, xb, yb));
+    float r00 = _saturatef(dvTex2D(tr, xa, ya)), r10 = _saturatef(dvTex2D(tr, xb, ya));
+    float r01 = _saturatef(dvTex2D(tr, xa, yb)), r11 = _saturatef(dvTex2D(tr, xb, yb));
+    if (pre >= 0.0f) {
+        float mx = _fmaxf(_fmaxf(_fmaxf(g00, g10), _fmaxf(g01, g11)), _fmaxf(_fmaxf(r00, r10), _fmaxf(r01, r11)));
+        if (mx < pre) return make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+    float b00 = _saturatef(dvTex2D(tb, xa, ya)), b10 = _saturatef(dvTex2D(tb, xb, ya));
+    float b01 = _saturatef(dvTex2D(tb, xa, yb)), b11 = _saturatef(dvTex2D(tb, xb, yb));
+    float r = lerp1(lerp1(r00, r10, ax), lerp1(r01, r11, ax), ay);
+    float g = lerp1(lerp1(g00, g10, ax), lerp1(g01, g11, ax), ay);
+    float b = lerp1(lerp1(b00, b10, ax), lerp1(b01, b11, ax), ay);
+    return make_float4(r, g, b, 1.0f);
+}
+
+__DEVICE__ float3 veilD(__TEXTURE2D__ tr, __TEXTURE2D__ tg, __TEXTURE2D__ tb, float fx, float fy, float sg, float sA, float sH,
+                        float thr, float pk, int w, int h)
+{
+    float g = sg / 1.4f, lo = thr - 0.04f, rw = 2.6f * sg;
+    int nx = (int)((float)(w) / g) + 1, ny = (int)((float)(h) / g) + 1;
+    int i0 = clampi((int)(_floorf((fx - rw) / g)), 0, nx - 1), i1 = clampi((int)(_floorf((fx + rw) / g)) + 1, 0, nx - 1);
+    int j0 = clampi((int)(_floorf((fy - rw) / g)), 0, ny - 1), j1 = clampi((int)(_floorf((fy + rw) / g)) + 1, 0, ny - 1);
+    float ar = 0.0f, ag = 0.0f, ab = 0.0f, ws = 0.0f, c2 = 0.5f / (sg * sg), q = 0.3f * g;
+    for (int j = 0; j < 24; j++) {
+        if (j0 + j > j1) break;
+        for (int i = 0; i < 24; i++) {
+            if (i0 + i > i1) break;
+            float qx = ((float)(i0 + i) + 0.5f) * g, qy = ((float)(j0 + j) + 0.5f) * g;
+            float dx = qx - fx, dy = qy - fy, d2 = dx * dx + dy * dy;
+            if (d2 >= rw * rw) continue;
+            float wt = _expf(-d2 * c2) * (1.0f - sstep(2.0f * sg, rw, _sqrtf(d2)));
+            float nr = 0.0f, ng = 0.0f, nb = 0.0f;
+            for (int k = 0; k < 5; k++) {
+                float ox = k == 0 ? 0.0f : ((k & 1) == 1 ? -q : q), oy = k == 0 ? 0.0f : (k < 3 ? -q : q);
+                float4 t = tapD(tr, tg, tb, qx + ox, qy + oy, -1.0f, w, h);
+                float lr = toLin(t.x), lg = toLin(t.y), lb = toLin(t.z);
+                float e = sstep(lo, 1.0f, luma(t.x, t.y, t.z));
+                float f = sA + sH * e * pk;
+                nr += lr * f; ng += lg * f; nb += lb * f;
+            }
+            ar += wt * nr; ag += wt * ng; ab += wt * nb; ws += wt * 5.0f;
+        }
+    }
+    return make_float3(ar / _fmaxf(ws, 1e-20f), ag / _fmaxf(ws, 1e-20f), ab / _fmaxf(ws, 1e-20f));
+}
+
+__DEVICE__ float kernD(int kind, float r, float p1, float p2)
+{
+    if (kind == 0) return _powf(r * r + p1 * p1, -0.5f * p2);
+    if (kind == 1) return _expf(-0.5f * r * r / (p1 * p1));
+    if (kind == 2) return 1.0f - sstep(p1 * (1.0f - p2), p1, r);
+    if (kind == 3) {
+        float q = (r - p1) / p2, a = r / (0.45f * p1);
+        return _expf(-0.5f * q * q) + 0.30f * _expf(-0.5f * a * a);
+    }
+    return _expf(-r / p1);
+}
+
+__DEVICE__ float3 gatherD(__TEXTURE2D__ tr, __TEXTURE2D__ tg, __TEXTURE2D__ tb, float fx, float fy, int kind, float p1, float p2,
+                          int place, float rA, float rB, int nR, int nT, float sA, float sH, float thr, float pk, float disp,
+                          float rot, float jit, int aEvery, int guard, int w, int h)
+{
+    float ar = 0.0f, ag = 0.0f, ab = 0.0f, war = 0.0f, wag = 0.0f, wab = 0.0f;
+    float hr = 0.0f, hg = 0.0f, hb = 0.0f, whr = 0.0f, whg = 0.0f, whb = 0.0f, hs = 0.0f, hq = 0.0f;
+    float lq = _logf(rB / rA), dA = 6.2831853f / (float)(nT), cd = _cosf(dA), sd = _sinf(dA);
+    float lo = thr - 0.04f;
+    float pre = _fmaxf((lo - 0.0722f) / 0.9278f, 0.0f);
+    float er = 1.0f / (1.0f + disp), eb = 1.0f / _fmaxf(1.0f - disp, 0.2f);
+    for (int m = 0; m < 48; m++) {
+        if (m >= nR) break;
+        float u = ((float)(m) + jit) / (float)(nR);
+        float r = place == 0 ? rA * _expf(lq * u) : _sqrtf(rA * rA + (rB * rB - rA * rA) * u);
+        float aw = (place == 0 ? r * r : 1.0f) * (1.0f - sstep(0.8f * rB, rB, r));
+        float kg = kernD(kind, r, p1, p2) * aw, kr = kg, kb = kg;
+        if (disp != 0.0f) { kr = kernD(kind, r * er, p1, p2) * aw; kb = kernD(kind, r * eb, p1, p2) * aw; }
+        float gq = 0.618034f * (float)(m);
+        float a0 = rot + dA * (gq - _floorf(gq));
+        float c = _cosf(a0), s = _sinf(a0);
+        for (int i = 0; i < 32; i++) {
+            if (i >= nT) break;
+            int doA = (sA > 0.0f && (i + m) % aEvery == 0) ? 1 : 0;
+            float4 t = tapD(tr, tg, tb, fx + r * c, fy + r * s, doA == 1 ? -1.0f : pre, w, h);
+            whr += kr; whg += kg; whb += kb;
+            if (doA == 1) { war += kr; wag += kg; wab += kb; }
+            if (t.w > 0.0f) {
+                float lr = toLin(t.x), lg = toLin(t.y), lb = toLin(t.z);
+                if (doA == 1) { ar += kr * lr; ag += kg * lg; ab += kb * lb; }
+                float e = sstep(lo, 1.0f, luma(t.x, t.y, t.z));
+                if (e > 0.0f) {
+                    e *= pk;
+                    hr += kr * lr * e; hg += kg * lg * e; hb += kb * lb * e;
+                    float v = kg * luma(lr, lg, lb) * e;
+                    hs += v; hq += v * v;
+                }
+            }
+            float c2 = c * cd - s * sd;
+            s = s * cd + c * sd; c = c2;
+        }
+    }
+    float gd = 1.0f;
+    if (guard == 1) gd = sstep(1.6f, 4.0f, hs * hs / _fmaxf(hq, 1e-20f));
+    float oa = sA / _fmaxf(wag, 1e-20f), oh = sH * gd / _fmaxf(whg, 1e-20f);
+    float rr = (war > 0.0f ? sA * ar / war : 0.0f) + (whr > 0.0f ? sH * gd * hr / whr : 0.0f);
+    float bb = (wab > 0.0f ? sA * ab / wab : 0.0f) + (whb > 0.0f ? sH * gd * hb / whb : 0.0f);
+    return make_float3(rr, ag * oa + hg * oh, bb);
+}
+
+__DEVICE__ float3 armsD(__TEXTURE2D__ tr, __TEXTURE2D__ tg, __TEXTURE2D__ tb, float fx, float fy, float ang, int nAx, float len,
+                        float lam, float sA, float sH, float thr, float pk, float disp, float jit, int w, int h)
+{
+    float ar = 0.0f, ag = 0.0f, ab = 0.0f, hr = 0.0f, hg = 0.0f, hb = 0.0f, wr = 0.0f, wg = 0.0f, wb = 0.0f;
+    float lo = thr - 0.04f;
+    float pre = sA > 0.0f ? -1.0f : _fmaxf((lo - 0.0722f) / 0.9278f, 0.0f);
+    int nL = (int)(len);
+    float lr0 = lam * (1.0f + disp), lb0 = lam * _fmaxf(1.0f - disp, 0.2f);
+    for (int a = 0; a < 6; a++) {
+        if (a >= 2 * nAx) break;
+        float an = ang + 3.1415927f * (float)(a) / (float)(nAx);
+        float ca = _cosf(an), sa = _sinf(an);
+        for (int j = 0; j < 128; j++) {
+            if (j >= nL) break;
+            float d = (float)(j) + 0.5f + jit;
+            float kg = _expf(-d / lam), kr = _expf(-d / lr0), kb = _expf(-d / lb0);
+            float o = 0.3f + 0.035f * d;
+            for (int q = 0; q < 5; q++) {
+                float of = (float)(q - 2) * o, wq = (float)(3 - (q > 2 ? q - 2 : 2 - q)) / 9.0f;
+                float4 t = tapD(tr, tg, tb, fx + d * ca - of * sa, fy + d * sa + of * ca, pre, w, h);
+                if (t.w > 0.0f) {
+                    float lr = toLin(t.x), lg = toLin(t.y), lb = toLin(t.z);
+                    float e = sstep(lo, 1.0f, luma(t.x, t.y, t.z)) * pk;
+                    ar += wq * kr * lr; ag += wq * kg * lg; ab += wq * kb * lb;
+                    hr += wq * kr * lr * e; hg += wq * kg * lg * e; hb += wq * kb * lb * e;
+                }
+            }
+            wr += kr; wg += kg; wb += kb;
+        }
+    }
+    return make_float3((sA * ar + sH * hr) / _fmaxf(wr, 1e-20f), (sA * ag + sH * hg) / _fmaxf(wg, 1e-20f), (sA * ab + sH * hb) / _fmaxf(wb, 1e-20f));
+}
+
+__DEVICE__ float3 tintD(float3 g, float t, float sat)
+{
+    float y = luma(g.x, g.y, g.z);
+    float r = lerp1(y, g.x, sat) * (1.0f + 0.22f * t), gg = lerp1(y, g.y, sat) * (1.0f + 0.02f * t), b = lerp1(y, g.z, sat) * (1.0f - 0.30f * t);
+    float k = y / _fmaxf(luma(r, gg, b), 1e-12f);
+    return make_float3(r * k, gg * k, b * k);
+}
+
+__DEVICE__ float smokeD(float u, float v, float t, float s, float dx, float dy, float dens, uint seed)
+{
+    float x = u / s - dx * t, y = v / s - dy * t;
+    float wx = 0.0f, wy = 0.0f, f = 0.0f, a = 0.5f, tot = 0.0f, fr = 1.0f;
+    for (int i = 0; i < 3; i++) {
+        wx += a * vnoise3(x * 0.55f * fr + 4099.1f, y * 0.55f * fr + 4096.0f + 9.3f * (float)(i), t * 0.045f * fr + 4096.0f, seed + (uint)(i));
+        wy += a * vnoise3(x * 0.55f * fr + 4096.0f, y * 0.55f * fr + 4103.7f + 5.1f * (float)(i), t * 0.045f * fr + 4096.0f, seed + 9u + (uint)(i));
+        tot += a; a *= 0.5f; fr *= 2.03f;
+    }
+    wx = wx / tot - 0.5f; wy = wy / tot - 0.5f;
+    a = 0.5f; tot = 0.0f; fr = 1.0f;
+    for (int i = 0; i < 5; i++) {
+        f += a * vnoise3((x + 1.6f * wx) * fr + 4096.0f + 37.1f * (float)(i), (y + 1.6f * wy) * fr + 4096.0f + 11.7f * (float)(i), t * 0.07f * fr + 4096.0f, seed + 17u + (uint)(i));
+        tot += a; a *= 0.5f; fr *= 2.03f;
+    }
+    f /= tot;
+    return sstep(0.56f - 0.30f * dens, 0.80f - 0.20f * dens, f);
+}
+
+__DEVICE__ float3 outD(float r, float g, float b, float lm, float k)
+{
+    float m = _fmaxf(r, _fmaxf(g, b));
+    float kn = _fminf(_fmaxf(0.8f, lm), 0.999f);
+    float rr = r, gg = g, bb = b;
+    if (m > kn) {
+        float nm = kn + (1.0f - kn) * _tanhf((m - kn) / (1.0f - kn));
+        float s = nm / m, wh = 0.6f * sstep(1.0f, 3.0f, m), w = _saturatef(k * 4.0f);
+        rr = lerp1(r, lerp1(r * s, nm, wh), w); gg = lerp1(g, lerp1(g * s, nm, wh), w); bb = lerp1(b, lerp1(b * s, nm, wh), w);
+    }
+    return make_float3(_saturatef(toDisp(rr)), _saturatef(toDisp(gg)), _saturatef(toDisp(bb)));
+}
+
+__DEVICE__ float3 filmOutD(float r, float g, float b)
+{
+    float rr = r <= 0.8f ? r : 0.8f + 0.2f * _tanhf((r - 0.8f) / 0.2f);
+    float gg = g <= 0.8f ? g : 0.8f + 0.2f * _tanhf((g - 0.8f) / 0.2f);
+    float bb = b <= 0.8f ? b : 0.8f + 0.2f * _tanhf((b - 0.8f) / 0.2f);
+    return make_float3(_saturatef(toDisp(rr)), _saturatef(toDisp(gg)), _saturatef(toDisp(bb)));
+}
+
+__DEVICE__ float3 dvMain(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE2D__ p_TexR, __TEXTURE2D__ p_TexG, __TEXTURE2D__ p_TexB, int dvFrame, float dvProgress, float dfAmount, float dfMode, float dfStrength, float dfSize, float dfThresh, float dfHigh, float dfWarm, float dfColour, float dfAngle, float dfX, float dfY, float dfSpot, float dfSoft, float dfDepth, float dfDensity, float dfSpeed, float dfSeed)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (dfAmount <= 0.0f || dfStrength <= 0.0f) return c0;
+    int m = (int)(dfMode + 0.5f);
+    float sc = (float)(H) / 1080.0f, fx = (float)(x), fy = (float)(y), Hf = (float)(H);
+    float z = _exp2f((dfSize - 50.0f) / 25.0f), k = dfStrength / 50.0f;
+    float thr = _fminf(dfThresh / 100.0f, 0.96f), pk = 1.0f + 9.0f * dfHigh / 100.0f;
+    float col = dfColour / 100.0f, soft = dfSoft / 100.0f, dep = dfDepth / 100.0f, v = (fy + 0.5f) / Hf;
+    uint sd = (uint)(dfSeed) * 613u + 7u;
+    float rot = 6.2831853f * hash01((uint)(x) + 4096u, (uint)(y) + 4096u, sd + 1u), jit = hash01((uint)(x) + 4096u, (uint)(y) + 4096u, sd);
+    float rA = _fmaxf(sc, 0.7f);
+    float3 c = make_float3(_saturatef(c0.x), _saturatef(c0.y), _saturatef(c0.z));
+    float3 L = make_float3(toLin(c.x), toLin(c.y), toLin(c.z));
+    float keep = 1.0f, tb = 0.0f, sat = 1.0f;
+    float3 G = make_float3(0.0f, 0.0f, 0.0f);
+    float df = lerp1(1.0f, 0.3f + 1.4f * (1.0f - v), dep);
+    if (m == 0) {
+        float rB = 200.0f * sc * z;
+        int nR = clampi((int)(_logf(rB / rA) / 0.1655144f) + 1, 2, 48);
+        float sA = 0.05f * k;
+        G = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 0, 1.5f * sc, 2.25f, 0, rA, rB, nR, 24, sA, 0.11f * k, thr, pk, 0.0f, rot, jit, 2, 1, W, H);
+        keep = 1.0f - sA;
+    } else if (m == 1) {
+        float rB = 240.0f * sc * z;
+        int nR = clampi((int)(_logf(rB / rA) / 0.1655144f) + 1, 2, 48);
+        float sA = _fminf(0.16f * k, 0.6f);
+        G = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 0, 2.0f * sc, 2.3f, 0, rA, rB, nR, 24, sA, 0.09f * k, thr, pk, 0.0f, rot, jit, 2, 1, W, H);
+        keep = 1.0f - sA; tb = 0.05f; sat = 0.85f;
+    } else if (m == 2) {
+        float rB = 220.0f * sc * z;
+        int nR = clampi((int)(_logf(rB / rA) / 0.1655144f) + 1, 2, 48);
+        float sA = _fminf(0.08f * k, 0.3f), sV = _fminf(0.24f * k, 0.6f);
+        float3 g1 = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 0, 3.0f * sc, 2.0f, 0, rA, rB, nR, 24, sA, 0.10f * k, thr, pk, 0.0f, rot, jit, 2, 1, W, H);
+        float3 g2 = veilD(p_TexR, p_TexG, p_TexB, fx, fy, 0.22f * Hf * z, sV, 0.04f * k, thr, pk, W, H);
+        G = make_float3(g1.x + g2.x, g1.y + g2.y, g1.z + g2.z);
+        keep = 1.0f - sA - sV; sat = 0.9f;
+    } else if (m == 3) {
+        float rB = 100.0f * sc * z;
+        int nR = clampi((int)(_logf(rB / rA) / 0.1655144f) + 1, 2, 48);
+        float sV = _fminf(0.34f * k * df, 0.85f);
+        float3 g1 = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 0, 2.0f * sc, 2.6f, 0, rA, rB, nR, 24, 0.0f, 0.05f * k, thr, pk, 0.0f, rot, jit, 2, 1, W, H);
+        float3 g2 = veilD(p_TexR, p_TexG, p_TexB, fx, fy, 0.30f * Hf * z, sV, 0.04f * k * df, thr, pk, W, H);
+        G = make_float3(g1.x + g2.x, g1.y + g2.y, g1.z + g2.z);
+        keep = 1.0f - sV; sat = 0.9f;
+    } else if (m == 4) {
+        float sg = 16.0f * sc * z, sA = _fminf(0.28f * k, 0.8f);
+        int nR = clampi((int)(_logf(2.6f * sg / rA) / 0.1655144f) + 1, 2, 48);
+        G = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 1, sg, 0.0f, 0, rA, 2.6f * sg, nR, 16, sA, 0.12f * k, thr, pk, 0.0f, rot, jit, 1, 0, W, H);
+        keep = 1.0f - sA; tb = -0.2f; sat = 0.45f;
+    } else if (m == 5) {
+        float R = 18.0f * sc * z, sA = _fminf(0.40f * k, 0.85f);
+        G = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 2, R, 0.15f + 0.7f * soft, 1, 0.0f, R, 16, 24, sA, 0.25f * k, thr, pk, 0.0f, rot, jit, 1, 0, W, H);
+        keep = 1.0f - sA;
+    } else if (m == 6) {
+        float lam = 24.0f * sc * z, sS = _fminf(0.18f * k, 0.5f);
+        float3 g1 = armsD(p_TexR, p_TexG, p_TexB, fx, fy, dfAngle * 0.0174533f, 2, _fminf(4.5f * lam, 128.0f), lam, 0.0f, 0.32f * k, thr, pk, 0.15f * col, jit, W, H);
+        float sg = 1.3f * sc;
+        float3 g2 = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 1, sg, 0.0f, 1, 0.0f, 3.0f * sg, 4, 8, sS, 0.0f, thr, pk, 0.0f, rot, jit, 1, 0, W, H);
+        G = make_float3(g1.x + g2.x, g1.y + g2.y, g1.z + g2.z);
+        keep = 1.0f - sS;
+    } else if (m == 7) {
+        float sg = 5.0f * sc * z, sA = _fminf(0.34f * k, 0.8f), lam = 6.0f * sc * z;
+        int nR = clampi((int)(_logf(2.6f * sg / rA) / 0.1655144f) + 1, 2, 48);
+        float3 g1 = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 1, sg, 0.0f, 0, rA, 2.6f * sg, nR, 16, sA, 0.06f * k, thr, pk, 0.0f, rot, jit, 1, 0, W, H);
+        float3 g2 = armsD(p_TexR, p_TexG, p_TexB, fx, fy, dfAngle * 0.0174533f, 3, _fminf(5.0f * lam, 60.0f), lam, 0.0f, 0.025f * k, thr, pk, 0.10f * col, jit, W, H);
+        G = make_float3(g1.x + g2.x, g1.y + g2.y, g1.z + g2.z);
+        keep = 1.0f - sA; tb = 0.07f;
+    } else if (m == 8) {
+        float dx = (fx - dfX / 100.0f * (float)(W)) / Hf, dy = (fy - dfY / 100.0f * Hf) / Hf;
+        float Rs = 0.05f + 0.6f * dfSpot / 100.0f, fe = 0.03f + 0.5f * soft;
+        float mk = sstep(Rs, Rs + fe, _sqrtf(dx * dx + dy * dy));
+        if (mk <= 0.0f) return c0;
+        float R = 22.0f * sc * z, sA = _fminf(0.70f * k, 0.92f) * mk;
+        G = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 2, R, 0.5f, 1, 0.0f, R, 16, 24, sA, 0.25f * k * mk, thr, pk, 0.0f, rot, jit, 1, 0, W, H);
+        keep = 1.0f - sA;
+    } else if (m == 9) {
+        float R = 90.0f * sc * z, wd = 0.18f * R;
+        G = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 3, R, wd, 1, 0.5f * sc, R + 3.0f * wd, 20, 24, 0.12f * k, 0.25f * k, thr, pk, 0.08f * col, rot, jit, 2, 0, W, H);
+        keep = 1.0f - 0.12f * k;
+    } else if (m == 10) {
+        float rB = 0.45f * Hf * z;
+        int nR = clampi((int)(_logf(rB / rA) / 0.1655144f) + 1, 2, 48);
+        float sV = _fminf(0.16f * k * df, 0.7f);
+        float3 g1 = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 0, 4.0f * sc, 1.7f, 0, rA, rB, nR, 24, 0.0f, 0.16f * k, thr, pk, 0.0f, rot, jit, 1, 1, W, H);
+        float3 g2 = veilD(p_TexR, p_TexG, p_TexB, fx, fy, 0.18f * Hf * z, sV, 0.06f * k * df, thr, pk, W, H);
+        G = make_float3(g1.x + g2.x, g1.y + g2.y, g1.z + g2.z);
+        keep = 1.0f - sV; tb = 0.5f; sat = 0.6f;
+    } else if (m == 11) {
+        float lm = 3.5f * sc * z, sg = 14.0f * sc * z;
+        int n1 = clampi((int)(_logf(5.0f * lm / rA) / 0.1655144f) + 1, 2, 48), n2 = clampi((int)(_logf(2.6f * sg / rA) / 0.1655144f) + 1, 2, 48);
+        float3 g1 = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 4, lm, 0.0f, 0, 0.5f * rA, 5.0f * lm, n1, 16, 0.0f, 0.16f * k, thr, pk, 0.0f, rot, jit, 1, 0, W, H);
+        float3 g2 = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 1, sg, 0.0f, 0, rA, 2.6f * sg, n2, 16, 0.0f, 0.09f * k, thr, pk, 0.0f, rot + 1.3f, jit, 1, 0, W, H);
+        float hy = luma(g1.x, g1.y, g1.z);
+        float3 hc = make_float3(hy * lerp1(1.4f, 2.6f, col), hy * lerp1(0.9f, 0.55f, col), hy * lerp1(0.75f, 0.08f, col));
+        float3 g3 = tintD(g2, 0.15f + dfWarm / 100.0f, 1.0f);
+        float3 o = filmOutD(L.x + hc.x + g3.x, L.y + hc.y + g3.y, L.z + hc.z + g3.z);
+        float a = dfAmount / 100.0f;
+        return make_float3(_saturatef(lerp1(c0.x, o.x, a)), _saturatef(lerp1(c0.y, o.y, a)), _saturatef(lerp1(c0.z, o.z, a)));
+    } else {
+        float3 fl = veilD(p_TexR, p_TexG, p_TexB, fx, fy, 0.06f * Hf, 1.0f, 0.5f, thr, pk, W, H);
+        float3 fa = veilD(p_TexR, p_TexG, p_TexB, fx, fy, 0.35f * Hf, 1.0f, 0.2f, thr, pk, W, H);
+        float3 fc = tintD(make_float3(0.7f * fl.x + 0.3f * fa.x, 0.7f * fl.y + 0.3f * fa.y, 0.7f * fl.z + 0.3f * fa.z), dfWarm / 100.0f, 0.8f);
+        fc = make_float3(fc.x + 0.7f * _fmaxf(L.x - fc.x, 0.0f), fc.y + 0.7f * _fmaxf(L.y - fc.y, 0.0f), fc.z + 0.7f * _fmaxf(L.z - fc.z, 0.0f));
+        float t = (float)(dvFrame) / 24.0f * (0.2f + 2.8f * dfSpeed / 100.0f);
+        float an = dfAngle * 0.0174533f, ca = _cosf(an), sa = _sinf(an) * 0.4f;
+        float dens = dfDensity / 100.0f, u = fx / Hf;
+        float d1 = smokeD(u, v, t, 0.30f * z, 0.08f * ca, 0.08f * sa, dens, sd + 300u) * (0.35f + 0.45f * dens);
+        float d2 = smokeD(u, v, t, 0.65f * z, 0.18f * ca, 0.18f * sa, dens, sd + 400u) * (0.25f + 0.45f * dens);
+        float gf = lerp1(1.0f, sstep(0.05f, 0.95f, v), 0.35f + 0.65f * dep);
+        float D = _fminf((1.0f - (1.0f - d1 * gf) * (1.0f - d2 * gf)) * k, 0.92f);
+        if (D <= 0.0f) return c0;
+        float3 o = outD(L.x * (1.0f - D) + D * fc.x, L.y * (1.0f - D) + D * fc.y, L.z * (1.0f - D) + D * fc.z, _fmaxf(L.x, _fmaxf(L.y, L.z)), D);
+        float a = dfAmount / 100.0f;
+        return make_float3(_saturatef(lerp1(c0.x, o.x, a)), _saturatef(lerp1(c0.y, o.y, a)), _saturatef(lerp1(c0.z, o.z, a)));
+    }
+    if (tb > -8.0f) G = tintD(G, tb + dfWarm / 100.0f, sat);
+    float3 o = outD(L.x * keep + G.x, L.y * keep + G.y, L.z * keep + G.z, _fmaxf(L.x, _fmaxf(L.y, L.z)), luma(G.x, G.y, G.z));
+    float a = dfAmount / 100.0f;
+    return make_float3(_saturatef(lerp1(c0.x, o.x, a)), _saturatef(lerp1(c0.y, o.y, a)), _saturatef(lerp1(c0.z, o.z, a)));
+}
+
+// fusegen: the kernel entry (Fusion's rows run bottom up; py is the DCTL's top-down row)
+__KERNEL__ void DevelopDiffusionKa6e83a75(__CONSTANTREF__ DevelopDiffusionPa6e83a75 *params, __TEXTURE2D__ p_TexR, __TEXTURE2D__ p_TexG, __TEXTURE2D__ p_TexB, __TEXTURE2D__ dvSrc, __TEXTURE2D_WRITE__ dvDst)
+{
+    DEFINE_KERNEL_ITERATORS_XY(x, y)
+    if (x < params->dvSize[0] && y < params->dvSize[1])
+    {
+        int py = params->dvFlipY != 0 ? params->dvSize[1] - 1 - y : y;
+        float3 c = dvMain(params->dvSize[0], params->dvSize[1], x, py, p_TexR, p_TexG, p_TexB, params->dvFrame, params->dvProgress, params->dfAmount, params->dfMode, params->dfStrength, params->dfSize, params->dfThresh, params->dfHigh, params->dfWarm, params->dfColour, params->dfAngle, params->dfX, params->dfY, params->dfSpot, params->dfSoft, params->dfDepth, params->dfDensity, params->dfSpeed, params->dfSeed);
+        float4 s = _tex2DVec4(dvSrc, x, y);
+        _tex2DVec4Write(dvDst, x, y, to_float4(c.x, c.y, c.z, s.w));
+    }
+}
+]]
+
+-- the plain source first; the compatibility source only if the plain one does not build
+DvSources = { DvMath .. DvMapping .. DvKernelText, DvCompat .. DvMath .. DvMapping .. DvKernelText }
+DvWorking = nil
+
+-- the last status of each tool, so a change is reported once
+DvLast = {}
+
+-- the compute node's error log (DVIPComputeNode:GetErrorLog, a name in fusionsystem.dll), or a note that it has none
+function DvNodeLog(node)
+	local log = nil
+	if node then
+		pcall(function()
+			log = node:GetErrorLog()
+		end)
+	end
+	if log == nil or log == "" then
+		return "(the node gave no error log; see the Fusion console)"
+	end
+	return tostring(log)
+end
+
+-- report a status: the console, the tool's data and the log file, each once per change
+function DvNote(tool, failed, msg)
+	local key = DvName
+	pcall(function()
+		key = tool.Name
+	end)
+	key = tostring(key)
+	local text = msg
+	if failed then
+		text = "FAILED: " .. msg
+	end
+	if DvLast[key] == text then
+		return
+	end
+	DvLast[key] = text
+	print(DvName .. " [" .. key .. "] " .. text)
+	pcall(function()
+		tool:SetData("DevelopFuse.Status", text)
+	end)
+	pcall(function()
+		local dir = os.getenv("TEMP") or os.getenv("TMP") or "."
+		local f = io.open(dir .. "/DevelopFuse.log", "a")
+		if f then
+			local line = (text:gsub("[\r\n]+", " | "))
+			f:write(os.date("%Y-%m-%d %H:%M:%S") .. "\t" .. key .. "\t" .. DvName .. "\t" .. line .. "\n")
+			f:close()
+		end
+	end)
+end
+
+-- a Lua error's message with its traceback when the debug library is there
+function DvTrace(e)
+	if debug and debug.traceback then
+		return debug.traceback(tostring(e), 2)
+	end
+	return tostring(e)
+end
+
+-- the visible error: a solid magenta frame the size of ref (nil when there is no picture to size it by)
+function DvFailImage(ref)
+	local bad = nil
+	if ref then
+		pcall(function()
+			bad = Image({IMG_Like = ref})
+			bad:Fill(Pixel({R = 1.0, G = 0.0, B = 1.0, A = 1.0}))
+		end)
+	end
+	return bad
+end
+
+function Create()
+	InDfAmount = self:AddInput("Diffusion", "dfAmount", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 100.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InDfMode = self:AddInput("Mode", "dfMode", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 0.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 12.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 12.0,
+		INPS_StatusText = "0 Black Mist, 1 Diffusion, 2 Fog, 3 Double Fog, 4 Frost, 5 Soft Focus, 6 Net, 7 Silk, 8 Center Spot, 9 Halo, 10 Atmospheric Glow, 11 Film Glow, 12 Smoke and Fog",
+		})
+	InDfStrength = self:AddInput("Strength", "dfStrength", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 50.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		INPS_StatusText = "The filter's grade: 50 about a quarter, 100 about a two; Smoke and Fog how thick",
+		})
+	InDfSize = self:AddInput("Size", "dfSize", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 50.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		INPS_StatusText = "How far the light scatters; the halo's radius; the smoke's scale",
+		})
+	InDfThresh = self:AddInput("Threshold", "dfThresh", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 70.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		INPS_StatusText = "Where the highlights begin to bloom (display brightness)",
+		})
+	InDfHigh = self:AddInput("Highlights", "dfHigh", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 50.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		INPS_StatusText = "How much brighter the clipped highlights were than white: how strongly they bloom",
+		})
+	InDfWarm = self:AddInput("Warmth", "dfWarm", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 0.0,
+		INP_MinScale = -100.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = -100.0,
+		INP_MaxAllowed = 100.0,
+		INPS_StatusText = "The scattered light's colour, warm above 0, cool below",
+		})
+	InDfColour = self:AddInput("Colour", "dfColour", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 50.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		INPS_StatusText = "Net, Silk and Halo: how far the colours part; Film Glow: how red the halation",
+		})
+	InDfAngle = self:AddInput("Angle", "dfAngle", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 0.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 180.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 180.0,
+		INPS_StatusText = "Net and Silk: the weave's angle; Smoke and Fog: the drift's direction",
+		})
+	InDfX = self:AddInput("Position X", "dfX", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 50.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InDfY = self:AddInput("Position Y", "dfY", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 50.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InDfSpot = self:AddInput("Spot", "dfSpot", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 45.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		INPS_StatusText = "Center Spot: the clear spot's size",
+		})
+	InDfSoft = self:AddInput("Softness", "dfSoft", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 50.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		INPS_StatusText = "Center Spot: its edge; Soft Focus: the halo disc's edge",
+		})
+	InDfDepth = self:AddInput("Depth", "dfDepth", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 0.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		INPS_StatusText = "Double Fog and Atmospheric Glow: thicker toward the top; Smoke and Fog: how low it pools",
+		})
+	InDfDensity = self:AddInput("Density", "dfDensity", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 50.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		INPS_StatusText = "Smoke and Fog: how much of the frame it covers",
+		})
+	InDfSpeed = self:AddInput("Speed", "dfSpeed", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 30.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InDfSeed = self:AddInput("Seed", "dfSeed", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 0.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InFrameOffset = self:AddInput("Frame Offset", "FrameOffset", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Integer = true,
+		INP_Default = 0,
+		INP_MinScale = 0,
+		INP_MaxScale = 1000,
+		INPS_StatusText = "Added to the comp frame to make the DCTL's frame value (Resolve's TIMELINE_FRAME_INDEX)",
+		})
+	InHoldFrame = self:AddInput("Hold Frame", "HoldFrame", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "CheckboxControl",
+		INP_Integer = true,
+		INP_Default = 0,
+		INPS_StatusText = "The frame value is Frame Offset alone, so a moving effect holds still",
+		})
+	InFlipY = self:AddInput("Rows Top Down", "FlipY", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "CheckboxControl",
+		INP_Integer = true,
+		INP_Default = 1,
+		IC_Visible = false,
+		})
+	InInput = self:AddInput("Input", "Input", {
+		LINKID_DataType = "Image",
+		LINK_Main = 1,
+		})
+	OutImage = self:AddOutput("Output", "Output", {
+		LINKID_DataType = "Image",
+		LINK_Main = 1,
+		})
+end
+
+-- one channel of img as its own texture, rows top-down (DvSplitSource); returns the plane, or nil and why
+function DvPlane(req, img, ch, flip)
+	local plane = Image({IMG_Like = img})
+	local node = DVIPComputeNode(req, DvSplitName, DvSplitSource, DvSplitParamsName, DvSplitParams)
+	if not node then
+		return nil, "the split kernel's compute node was not created (DVIPComputeNode gave nil)"
+	end
+	local p = node:GetParamBlock(DvSplitParams)
+	p.ch = ch
+	p.flipY = flip
+	p.size[0] = img.DataWindow:Width()
+	p.size[1] = img.DataWindow:Height()
+	node:SetParamBlock(p)
+	node:AddInput("src", img)
+	node:AddOutput("dst", plane)
+	if node:RunSession(req) then
+		return plane
+	end
+	return nil, "the split kernel did not run: " .. DvNodeLog(node)
+end
+
+-- the kernel over every pixel with source k; returns true when it ran, or false and why
+function DvRun(req, k, src, inc, planes, out, frame, flip, progress)
+	local node = DVIPComputeNode(req, DvKernelName, DvSources[k], DvParamsName, DvParams)
+	if not node then
+		return false, "source " .. k .. ": the compute node was not created (DVIPComputeNode gave nil)"
+	end
+	local p = node:GetParamBlock(DvParams)
+	p.dfAmount = InDfAmount:GetValue(req).Value
+	p.dfMode = InDfMode:GetValue(req).Value
+	p.dfStrength = InDfStrength:GetValue(req).Value
+	p.dfSize = InDfSize:GetValue(req).Value
+	p.dfThresh = InDfThresh:GetValue(req).Value
+	p.dfHigh = InDfHigh:GetValue(req).Value
+	p.dfWarm = InDfWarm:GetValue(req).Value
+	p.dfColour = InDfColour:GetValue(req).Value
+	p.dfAngle = InDfAngle:GetValue(req).Value
+	p.dfX = InDfX:GetValue(req).Value
+	p.dfY = InDfY:GetValue(req).Value
+	p.dfSpot = InDfSpot:GetValue(req).Value
+	p.dfSoft = InDfSoft:GetValue(req).Value
+	p.dfDepth = InDfDepth:GetValue(req).Value
+	p.dfDensity = InDfDensity:GetValue(req).Value
+	p.dfSpeed = InDfSpeed:GetValue(req).Value
+	p.dfSeed = InDfSeed:GetValue(req).Value
+	p.dvProgress = progress
+	p.dvFrame = frame
+	p.dvFlipY = flip
+	p.dvSize[0] = src.DataWindow:Width()
+	p.dvSize[1] = src.DataWindow:Height()
+	node:SetParamBlock(p)
+	node:AddInput("p_TexR", planes.p_TexR)
+	node:AddInput("p_TexG", planes.p_TexG)
+	node:AddInput("p_TexB", planes.p_TexB)
+	node:AddInput("dvSrc", src)
+	node:AddOutput("dvDst", out)
+	if node:RunSession(req) then
+		return true
+	end
+	return false, "source " .. k .. ": RunSession failed: " .. DvNodeLog(node)
+end
+
+function DvProcess(req)
+	local src = InInput:GetValue(req)
+	if not src then
+		return nil, "no input image", true, nil
+	end
+	if req:IsPreCalc() then
+		return Image({IMG_Like = src, IMG_NoData = true}), nil, false, src
+	end
+	local inc = nil
+	local progress = 0.0
+	local out = Image({IMG_Like = src})
+	local flip = math.floor(InFlipY:GetValue(req).Value + 0.5)
+	local frame = math.floor(InFrameOffset:GetValue(req).Value + 0.5)
+	if InHoldFrame:GetValue(req).Value < 0.5 then
+		frame = frame + math.floor(req.Time + 0.5)
+	end
+	local planes = {}
+	local why = nil
+	planes.p_TexR, why = DvPlane(req, src, 0, flip)
+	if not planes.p_TexR then
+		return nil, "p_TexR: " .. tostring(why), true, src
+	end
+	planes.p_TexG, why = DvPlane(req, src, 1, flip)
+	if not planes.p_TexG then
+		return nil, "p_TexG: " .. tostring(why), true, src
+	end
+	planes.p_TexB, why = DvPlane(req, src, 2, flip)
+	if not planes.p_TexB then
+		return nil, "p_TexB: " .. tostring(why), true, src
+	end
+	local order = {}
+	if DvWorking then
+		order[1] = DvWorking
+	end
+	for k = 1, #DvSources do
+		if k ~= DvWorking then
+			order[#order + 1] = k
+		end
+	end
+	local errs = {}
+	for i = 1, #order do
+		local ok, err = DvRun(req, order[i], src, inc, planes, out, frame, flip, progress)
+		if ok then
+			DvWorking = order[i]
+			return out, "ok, the kernel runs from source " .. order[i], false, src
+		end
+		errs[#errs + 1] = tostring(err)
+	end
+	return nil, "the kernel ran from no source: " .. table.concat(errs, " || "), true, src
+end
+
+-- every failure is reported and shows as magenta; the input never passes through quietly
+function Process(req)
+	local res, msg, failed, ref = nil, nil, true, nil
+	local called, err = xpcall(function()
+		res, msg, failed, ref = DvProcess(req)
+	end, DvTrace)
+	if not called then
+		res, msg, failed = nil, "Lua error in Process: " .. tostring(err), true
+		if not ref then
+			pcall(function()
+				ref = InInput:GetValue(req)
+			end)
+		end
+	end
+	if msg then
+		DvNote(self, failed, msg)
+	end
+	if failed then
+		res = DvFailImage(ref)
+	end
+	OutImage:Set(req, res)
+end

@@ -1,0 +1,202 @@
+// Develop Night: day for night. Rec.709 display in and out. It sits after the look node and before
+// Bloom, so the lights of the night picture are the ones that bloom.
+//
+// In linear light: the picture drops by Night Exposure, and the sky (top of the frame, bright, blue or white) by Sky
+// Drop more. The darkness then takes rod vision: its luminance comes from the scotopic luminance of Larson,
+// Rushmeier and Piatko (IEEE TVCG 1997, eq. 13: V = Y (1.33 (1 + (Y + Z) / X) - 1.68), a fit to the ColorChecker),
+// scaled so white keeps its luminance, so reds go dark and blues stay light; and its colour moves to the Night Hue,
+// as Jensen, Premoze, Shirley, Thompson, Ferwerda and Stark shift scotopic pixels toward a blue (Night Rendering,
+// 2000; chromaticity 0.25, 0.25), in Oklab: the Night Hue at a chroma set by Night Saturation, with Keep Colour of the
+// pixel's own (a, b) riding on it, as a fitted night LUT keeps a share of each pixel's hue (mixing the two
+// colours instead would grey them). Footage carries no
+// absolute luminance, so the mesopic ramp sits on brightness after the night exposure: only what stays bright keeps
+// its daylight colour. The brightest light of the input (by luminance, from Light Start up) is protected by Light Protect: it
+// drops less and turns cool white with Light Tint of the Night Hue, as moonlight does (Light Warmth keeps its own colour
+// instead). Detail Loss softens texture in the dark and
+// leaves strong edges sharp (Jensen et al.: more blur where the gradient is weak). Night Contrast works in stops
+// around grey. Night mixes the result with the input in display terms. With Night at 0 the input comes back
+// untouched. MIT License.
+
+DEFINE_UI_PARAMS(ntAmt,    Night,             DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ntStops,  Night Exposure,    DCTLUI_SLIDER_FLOAT, 2.0, 0.0, 5.0, 0.05)
+DEFINE_UI_PARAMS(ntSky,    Sky Drop,          DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 1.4, 0.05)
+DEFINE_UI_PARAMS(ntRod,    Rod Vision,        DCTLUI_SLIDER_FLOAT, 80.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ntHue,    Night Hue,         DCTLUI_SLIDER_FLOAT, 227.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(ntSat,    Night Saturation,  DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ntKeep,   Keep Colour,       DCTLUI_SLIDER_FLOAT, 25.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ntLight,  Light Protect,     DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ntLStart, Light Start,       DCTLUI_SLIDER_FLOAT, 80.0, 30.0, 95.0, 1.0)
+DEFINE_UI_PARAMS(ntWarm,   Light Warmth,      DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ntLTint,  Light Tint,        DCTLUI_SLIDER_FLOAT, 20.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ntDetail, Detail Loss,       DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ntContr,  Night Contrast,    DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Night, "0 is off; how much of the day-for-night the picture takes")
+DEFINE_UI_TOOLTIP(Night Exposure, "Stops the picture drops for night")
+DEFINE_UI_TOOLTIP(Sky Drop, "Further stops for the sky (bright, blue or white, toward the top of the frame); it also lets a bright sky lose Light Protect")
+DEFINE_UI_TOOLTIP(Rod Vision, "How far the darkness takes night vision: reds go dark, blues stay light, colour turns to the Night Hue")
+DEFINE_UI_TOOLTIP(Night Hue, "The colour of the night, on the same wheel as the Shadows Hue of Develop (227 is a moonlit blue)")
+DEFINE_UI_TOOLTIP(Night Saturation, "How strongly the night carries its hue")
+DEFINE_UI_TOOLTIP(Keep Colour, "How much of each colour of the footage stays inside the night")
+DEFINE_UI_TOOLTIP(Light Protect, "The brightest light drops less and stays a light: a sun becomes a moon")
+DEFINE_UI_TOOLTIP(Light Start, "How bright the input must be (display brightness) before Light Protect holds it up; lower keeps more of the light bright, as a moonlit look keeps lit fog and water")
+DEFINE_UI_TOOLTIP(Light Warmth, "0 turns protected light cool white, like moonlight; 100 keeps its own colour, like a lamp")
+DEFINE_UI_TOOLTIP(Light Tint, "How much Night Hue the protected light carries: 0 is white, 20 a faint blue, higher a pale moonlit blue")
+DEFINE_UI_TOOLTIP(Detail Loss, "Night vision loses fine texture in the dark; strong edges stay sharp")
+DEFINE_UI_TOOLTIP(Night Contrast, "Contrast of the night picture, in stops around grey")
+
+__DEVICE__ float luma(float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; }
+
+__DEVICE__ float3 hueDir(float hDeg)
+{
+    float h = _fmod(hDeg, 360.0f) / 60.0f;
+    float x = 1.0f - _fabs(_fmod(h, 2.0f) - 1.0f);
+    float r = 0.0f, g = 0.0f, b = 0.0f;
+    if (h < 1.0f)      { r = 1.0f; g = x; }
+    else if (h < 2.0f) { r = x; g = 1.0f; }
+    else if (h < 3.0f) { g = 1.0f; b = x; }
+    else if (h < 4.0f) { g = x; b = 1.0f; }
+    else if (h < 5.0f) { r = x; b = 1.0f; }
+    else               { r = 1.0f; b = x; }
+    float y = luma(r, g, b);
+    return make_float3(r - y, g - y, b - y);
+}
+
+__DEVICE__ float smooth01(float a, float b, float x)
+{
+    float t = _saturatef((x - a) / (b - a));
+    return t * t * (3.0f - 2.0f * t);
+}
+
+__DEVICE__ float toLin(float x) { return _powf(_fmaxf(x, 0.0f), 2.4f); }
+__DEVICE__ float toDisp(float x) { return _powf(_fmaxf(x, 0.0f), 1.0f / 2.4f); }
+
+__DEVICE__ float rodRatio(float r, float g, float b)
+{
+    float X = 0.4124564f * r + 0.3575761f * g + 0.1804375f * b;
+    float Y = 0.2126729f * r + 0.7151522f * g + 0.0721750f * b;
+    float Z = 0.0193339f * r + 0.1191920f * g + 0.9503041f * b;
+    if (X <= 1e-9f || Y <= 1e-9f)
+    {
+        return 1.0f;
+    }
+    return _fmaxf(1.33f * (1.0f + (Y + Z) / X) - 1.68f, 0.0f) * 0.38868f;
+}
+
+__DEVICE__ float3 toOklab(float r, float g, float b)
+{
+    float l = 0.4122214708f * r + 0.5363325363f * g + 0.0514459929f * b;
+    float m = 0.2119034982f * r + 0.6806995451f * g + 0.1073969566f * b;
+    float s = 0.0883024619f * r + 0.2817188376f * g + 0.6299787005f * b;
+    l = _powf(_fmaxf(l, 0.0f), 1.0f / 3.0f); m = _powf(_fmaxf(m, 0.0f), 1.0f / 3.0f); s = _powf(_fmaxf(s, 0.0f), 1.0f / 3.0f);
+    return make_float3(0.2104542553f * l + 0.7936177850f * m - 0.0040720468f * s,
+                       1.9779984951f * l - 2.4285922050f * m + 0.4505937099f * s,
+                       0.0259040371f * l + 0.7827717662f * m - 0.8086757660f * s);
+}
+
+__DEVICE__ float3 fromOklab(float L, float a, float b)
+{
+    float l = L + 0.3963377774f * a + 0.2158037573f * b;
+    float m = L - 0.1055613458f * a - 0.0638541728f * b;
+    float s = L - 0.0894841775f * a - 1.2914855480f * b;
+    l = l * l * l; m = m * m * m; s = s * s * s;
+    return make_float3( 4.0767416621f * l - 3.3077115913f * m + 0.2309699292f * s,
+                       -1.2684380046f * l + 2.6097574011f * m - 0.3413193965f * s,
+                       -0.0041960863f * l - 0.7034186147f * m + 1.7076147010f * s);
+}
+
+__DEVICE__ float2 abDir(float hDeg)
+{
+    float3 d = hueDir(hDeg);
+    float3 c = toOklab(0.2f + 0.1f * d.x, 0.2f + 0.1f * d.y, 0.2f + 0.1f * d.z);
+    float n = _sqrtf(c.y * c.y + c.z * c.z) + 1e-6f;
+    return make_float2(c.y / n, c.z / n);
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float r = _tex2D(p_TexR, p_X, p_Y), g = _tex2D(p_TexG, p_X, p_Y), b = _tex2D(p_TexB, p_X, p_Y);
+    if (ntAmt <= 0.0f)
+    {
+        return make_float3(r, g, b);
+    }
+    float lr = toLin(r), lg = toLin(g), lb = toLin(b);
+    float dmax = _fmaxf(r, _fmaxf(g, b));
+
+    if (ntDetail > 0.0f)
+    {
+        int d = (int)((float)(p_Height) / 720.0f + 0.5f);
+        d = d < 1 ? 1 : d;
+        int x0 = p_X - d < 0 ? 0 : p_X - d, x1 = p_X + d > p_Width - 1 ? p_Width - 1 : p_X + d;
+        int y0 = p_Y - d < 0 ? 0 : p_Y - d, y1 = p_Y + d > p_Height - 1 ? p_Height - 1 : p_Y + d;
+        float ar = toLin(_tex2D(p_TexR, x0, p_Y)), ag = toLin(_tex2D(p_TexG, x0, p_Y)), ab = toLin(_tex2D(p_TexB, x0, p_Y));
+        float br = toLin(_tex2D(p_TexR, x1, p_Y)), bg = toLin(_tex2D(p_TexG, x1, p_Y)), bb = toLin(_tex2D(p_TexB, x1, p_Y));
+        float ur = toLin(_tex2D(p_TexR, p_X, y0)), ug = toLin(_tex2D(p_TexG, p_X, y0)), ub = toLin(_tex2D(p_TexB, p_X, y0));
+        float vr = toLin(_tex2D(p_TexR, p_X, y1)), vg = toLin(_tex2D(p_TexG, p_X, y1)), vb = toLin(_tex2D(p_TexB, p_X, y1));
+        float sr = ar + br + ur + vr, sg = ag + bg + ug + vg, sb = ab + bb + ub + vb;
+        sr += toLin(_tex2D(p_TexR, x0, y0)) + toLin(_tex2D(p_TexR, x1, y0)) + toLin(_tex2D(p_TexR, x0, y1)) + toLin(_tex2D(p_TexR, x1, y1));
+        sg += toLin(_tex2D(p_TexG, x0, y0)) + toLin(_tex2D(p_TexG, x1, y0)) + toLin(_tex2D(p_TexG, x0, y1)) + toLin(_tex2D(p_TexG, x1, y1));
+        sb += toLin(_tex2D(p_TexB, x0, y0)) + toLin(_tex2D(p_TexB, x1, y0)) + toLin(_tex2D(p_TexB, x0, y1)) + toLin(_tex2D(p_TexB, x1, y1));
+        float gx = _fabs(_log2f((luma(br, bg, bb) + 1e-5f) / (luma(ar, ag, ab) + 1e-5f)));
+        float gy = _fabs(_log2f((luma(vr, vg, vb) + 1e-5f) / (luma(ur, ug, ub) + 1e-5f)));
+        float edge = smooth01(0.3f, 1.2f, _fmaxf(gx, gy));
+        float yc = luma(lr, lg, lb) * _exp2f(-ntStops);
+        float dark = 1.0f - smooth01(0.02f, 0.25f, toDisp(yc));
+        float w = ntDetail / 100.0f * 0.7f * dark * (1.0f - edge);
+        lr += (sr / 8.0f - lr) * w; lg += (sg / 8.0f - lg) * w; lb += (sb / 8.0f - lb) * w;
+    }
+
+    float y = luma(lr, lg, lb);
+    float ls = ntLStart / 100.0f;
+    float lp = smooth01(ls, ls + 0.17f, toDisp(y)) * ntLight / 100.0f;
+    float c = _fmaxf(lr, _fmaxf(lg, lb)) - _fminf(lr, _fminf(lg, lb));
+    float blueish = smooth01(0.0f, 0.15f, (lb - lr) / (_fmaxf(lr, _fmaxf(lg, lb)) + 1e-5f));
+    float neutral = 1.0f - smooth01(0.08f, 0.25f, c / (_fmaxf(lr, _fmaxf(lg, lb)) + 1e-5f));
+    float top = 1.0f - smooth01(0.30f, 0.55f, ((float)(p_Y) + 0.5f) / (float)(p_Height));
+    float sky = top * smooth01(0.30f, 0.85f, toDisp(y)) * _fmaxf(blueish, neutral);
+    lp *= 1.0f - sky * _fminf(ntSky, 1.0f);
+
+    float stops = ntStops * (1.0f - 0.85f * lp) + ntSky * sky;
+    float e = _exp2f(-stops);
+    float er = lr * e, eg = lg * e, eb = lb * e;
+    float ye = y * e;
+
+    float photo = smooth01(0.30f, 0.85f, toDisp(ye));
+    float rod = ntRod / 100.0f * (1.0f - photo) * (1.0f - lp);
+    float yn = ye * (1.0f + (rodRatio(er, eg, eb) - 1.0f) * rod);
+
+    float sc = ye > 1e-12f ? yn / ye : 1.0f;
+    float3 own = toOklab(er * sc, eg * sc, eb * sc);
+    float2 hd = abDir(ntHue);
+    float cn = 0.16f * ntSat / 100.0f * _clampf(own.x / 0.2f, 0.5f, 1.0f);
+    float keep = ntKeep / 100.0f;
+    float na = own.y + (hd.x * cn + keep * own.y - own.y) * rod;
+    float nb = own.z + (hd.y * cn + keep * own.z - own.z) * rod;
+    float cw = lp * (1.0f - ntWarm / 100.0f);
+    float tint = ntLTint / 1000.0f;
+    na += (tint * hd.x - na) * cw;
+    nb += (tint * hd.y - nb) * cw;
+    float3 o = fromOklab(own.x, na, nb);
+    float yl = _fmaxf(luma(o.x, o.y, o.z), 0.0f);
+    float mn = _fminf(o.x, _fminf(o.y, o.z));
+    float k = mn < 0.0f ? yl / (yl - mn + 1e-12f) : 1.0f;
+    float orr = yl + (o.x - yl) * k, og = yl + (o.y - yl) * k, ob = yl + (o.z - yl) * k;
+
+    if (ntContr != 0.0f && yl > 1e-12f)
+    {
+        float pv = 0.18f * _exp2f(-ntStops);
+        float f = pv * _powf(yl / pv, _exp2f(0.65f * ntContr / 100.0f)) / yl;
+        orr *= f; og *= f; ob *= f;
+    }
+
+    float s = _fminf(ntAmt, 100.0f) / 100.0f;
+    float lim = _fmaxf(dmax, 1.0f);
+    float ol = _fmaxf(orr, _fmaxf(og, ob)), ll = toLin(lim);
+    if (ol > ll)
+    {
+        orr *= ll / ol; og *= ll / ol; ob *= ll / ol;
+    }
+    float o1 = _fminf(toDisp(orr), lim), o2 = _fminf(toDisp(og), lim), o3 = _fminf(toDisp(ob), lim);
+    float a1 = _fmaxf(r, 0.0f), a2 = _fmaxf(g, 0.0f), a3 = _fmaxf(b, 0.0f);
+    return make_float3(a1 + (o1 - a1) * s, a2 + (o2 - a2) * s, a3 + (o3 - a3) * s);
+}

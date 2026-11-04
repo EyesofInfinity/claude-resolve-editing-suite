@@ -1,0 +1,23 @@
+// Develop Bloom, first node of the glow cascade: the colour-keeping bright pass with a soft knee.
+// Rec.709 gamma 2.4 in (the graded picture); out the light above the threshold, linear, times 1/8, in its own
+// colour, so a red light blooms red. Feeds Develop Bloom Level 0. MIT License.
+
+DEFINE_UI_PARAMS(bloomThr,  Bloom Threshold, DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bloomKnee, Bloom Knee,      DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Bloom Threshold, "Brightness where the bloom starts, as display brightness")
+DEFINE_UI_TOOLTIP(Bloom Knee, "How softly the bloom starts below the threshold: 0 is a hard start")
+
+__DEVICE__ float luma(float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; }
+__DEVICE__ float toLin(float x) { return _powf(_fmaxf(x, 0.0f), 2.4f); }
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float r = toLin(_tex2D(p_TexR, p_X, p_Y)), g = toLin(_tex2D(p_TexG, p_X, p_Y)), b = toLin(_tex2D(p_TexB, p_X, p_Y));
+    float Y = luma(r, g, b);
+    float thr = toLin(bloomThr / 100.0f), k = bloomKnee / 100.0f * thr;
+    float s = _clampf(Y - thr + k, 0.0f, 2.0f * k);
+    float soft = s * s / (4.0f * k + 1e-5f);
+    float w = _fmaxf(soft, Y - thr) / _fmaxf(Y, 1e-5f);
+    return make_float3(r * w * 0.125f, g * w * 0.125f, b * w * 0.125f);
+}

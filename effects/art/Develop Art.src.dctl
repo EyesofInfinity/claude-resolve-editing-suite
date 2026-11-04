@@ -1,0 +1,215 @@
+// Develop Art: print, ink and paint looks in one transform DCTL.
+// Ten modes:
+//   0 Halftone: ink dots on a screen at Angle, each dot's size set by the tone (a cosine spot, dots turning to holes
+//     past half tone), on paper.
+//   1 Colour Halftone: four screens, cyan 15, magenta 75, yellow 0 and black 45 degrees, laid as inks on paper.
+//   2 Halftone Rings: rings round the centre, each as thick as the tone is dark.
+//   3 Crosshatch: pen hatching in up to four layers as the tone darkens, each line wobbling and breaking by hand.
+//   4 Etching: an engraver's line screen bent by the forms (the lines swell with the dark and follow the light), a
+//     second set crossing the darkest.
+//   5 Sketch: pencil lines on the picture's edges, light hatching in its shadows, graphite on paper.
+//   6 Cartoon: the picture smoothed and cut to Level steps of light, saturated, inked on its edges.
+//   7 Mosaic: Roman tiles (jittered cells), each the colour under its centre, bevelled, set in grout.
+//   8 Scatter: every pixel thrown up to Size away (diffusion), a new throw on each boil.
+//   9 Posterize: colour cut to few levels a channel through an ordered dither, no smoothing.
+// Colour mixes the picture's colour into the inks and paper. Boil redraws the hand modes (Crosshatch, Sketch, Scatter)
+// a few times a second by TIMELINE_FRAME_INDEX, the way a drawn animation boils; 0 holds them still. An OpenFX DCTL
+// effect or a DCTL plugin node. Amount mixes with the picture in display terms; Amount 0 is the input exactly. MIT License.
+
+DEFINE_UI_PARAMS(arAmount, Art,         DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(arMode,   Mode,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 9.0, 1.0)
+DEFINE_UI_PARAMS(arSize,   Size,        DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(arAngle,  Angle,       DCTLUI_SLIDER_FLOAT, 45.0, 0.0, 180.0, 1.0)
+DEFINE_UI_PARAMS(arLevel,  Level,       DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(arColour, Colour,      DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(arPaper,  Paper,       DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(arBoil,   Boil,        DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(arSeed,   Seed,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Mode, "0 Halftone, 1 Colour Halftone, 2 Halftone Rings, 3 Crosshatch, 4 Etching, 5 Sketch, 6 Cartoon, 7 Mosaic, 8 Scatter, 9 Posterize")
+DEFINE_UI_TOOLTIP(Size, "The screen, line spacing, tile or throw size")
+DEFINE_UI_TOOLTIP(Level, "Ink weight; Cartoon and Posterize: how many levels; Mosaic: grout width")
+DEFINE_UI_TOOLTIP(Boil, "Crosshatch, Sketch, Scatter: how often the drawing is redrawn; 0 holds it")
+
+#include "../light/light.h"
+#include "../glitch/glitch.h"
+
+__DEVICE__ float fr1(float v) { return v - _floorf(v); }
+__DEVICE__ float3 mix3a(float3 a, float3 b, float t) { return make_float3(lerp1(a.x, b.x, t), lerp1(a.y, b.y, t), lerp1(a.z, b.z, t)); }
+
+__DEVICE__ float screenInk(float x, float y, float ang, float cell, float dark)
+{
+    float ca = _cosf(ang), sa = _sinf(ang);
+    float u = (x * ca + y * sa) / cell, v = (-x * sa + y * ca) / cell;
+    float f = 0.5f - 0.25f * (_cosf(6.2831853f * u) + _cosf(6.2831853f * v));
+    float w = 0.8f * 1.5707963f / cell;
+    return sstep(f - w, f + w, dark * (1.0f + 2.0f * w) - w);
+}
+
+__DEVICE__ float3 cross5(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int x, int y, int w, int h, int r)
+{
+    float3 a = rgbAt(tr, tg, tb, x, y, w, h), b = rgbAt(tr, tg, tb, x - r, y, w, h), c = rgbAt(tr, tg, tb, x + r, y, w, h);
+    float3 d = rgbAt(tr, tg, tb, x, y - r, w, h), e = rgbAt(tr, tg, tb, x, y + r, w, h);
+    return make_float3((a.x + b.x + c.x + d.x + e.x) / 5.0f, (a.y + b.y + c.y + d.y + e.y) / 5.0f, (a.z + b.z + c.z + d.z + e.z) / 5.0f);
+}
+
+__DEVICE__ float edgeAt(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int x, int y, int w, int h, int r0)
+{
+    int r = r0 < 1 ? 1 : r0;
+    float a = lumaAt(tr, tg, tb, x - r, y - r, w, h), b = lumaAt(tr, tg, tb, x, y - r, w, h), c = lumaAt(tr, tg, tb, x + r, y - r, w, h);
+    float d = lumaAt(tr, tg, tb, x - r, y, w, h), f = lumaAt(tr, tg, tb, x + r, y, w, h);
+    float g = lumaAt(tr, tg, tb, x - r, y + r, w, h), k = lumaAt(tr, tg, tb, x, y + r, w, h), m = lumaAt(tr, tg, tb, x + r, y + r, w, h);
+    float gx = (c + 2.0f * f + m) - (a + 2.0f * d + g), gy = (g + 2.0f * k + m) - (a + 2.0f * b + c);
+    return _sqrtf(gx * gx + gy * gy) / 4.0f;
+}
+
+__DEVICE__ float handLines(float x, float y, float ang, float sp, float hw, float bt, float sc, uint s)
+{
+    float ca = _cosf(ang), sa = _sinf(ang);
+    float u = (x * ca + y * sa) / sp, along = (-x * sa + y * ca);
+    float li = _floorf(u);
+    float wob = (fbm(along / (60.0f * sc), li * 1.37f, bt, 2, s) - 0.5f) * 0.45f;
+    float d = _fabs(fr1(u + wob) - 0.5f);
+    float w = 0.7f / sp;
+    float ink = 1.0f - sstep(hw - w, hw + w, d);
+    float brk = fbm(along / (35.0f * sc) + 7.0f, li * 2.11f + 3.0f, bt, 2, s + 9u);
+    return ink * (1.0f - sstep(0.68f, 0.78f, brk));
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (arAmount <= 0.0f) return c0;
+    int m = (int)(arMode + 0.5f);
+    float sc = (float)(H) / 1080.0f, fx = (float)(x), fy = (float)(y);
+    float an = arAngle * 0.0174533f, col = arColour / 100.0f, lvl = arLevel / 100.0f;
+    uint sd = (uint)(arSeed) * 523u + 5u;
+    int every = arBoil <= 0.0f ? 0 : 2 + (int)((100.0f - arBoil) / 100.0f * 12.0f);
+    int bf = every == 0 ? 0 : (int)(TIMELINE_FRAME_INDEX / every);
+    float bt = (float)(bf) * 1.618f;
+    float pn = (fbm(fx / (2.5f * sc), fy / (2.5f * sc), 0.0f, 3, sd + 77u) - 0.5f) * 0.10f * arPaper / 100.0f;
+    float3 paper0 = make_float3(0.965f + pn, 0.950f + pn, 0.910f + pn);
+    float3 paper = mix3a(paper0, make_float3(lerp1(paper0.x, 0.55f + 0.45f * c0.x, 0.6f), lerp1(paper0.y, 0.55f + 0.45f * c0.y, 0.6f), lerp1(paper0.z, 0.55f + 0.45f * c0.z, 0.6f)), col);
+    float3 inkc = mix3a(make_float3(0.07f, 0.065f, 0.075f), make_float3(c0.x * 0.45f, c0.y * 0.45f, c0.z * 0.45f), col);
+    float3 o = c0;
+    if (m == 0 || m == 2) {
+        float cell = (4.0f + 0.30f * arSize) * sc;
+        float3 t = cross5(p_TexR, p_TexG, p_TexB, x, y, W, H, (int)(cell / 3.0f));
+        float dark = _saturatef((1.0f - luma(t.x, t.y, t.z)) * (0.6f + 0.8f * lvl));
+        float ink;
+        if (m == 0) {
+            ink = screenInk(fx, fy, an, cell, dark);
+        } else {
+            float cx = 0.5f * (float)(W) - 0.5f, cy = 0.5f * (float)(H) - 0.5f;
+            float r = _sqrtf((fx - cx) * (fx - cx) + (fy - cy) * (fy - cy)) / cell;
+            float d = _fabs(fr1(r) - 0.5f), w = 0.7f / cell;
+            ink = (1.0f - sstep(dark * 0.5f - w, dark * 0.5f + w, d)) * sstep(0.0f, 0.02f, dark);
+        }
+        float3 ic = mix3a(make_float3(0.06f, 0.06f, 0.07f), make_float3(t.x * 0.55f, t.y * 0.55f, t.z * 0.55f), col);
+        o = mix3a(paper0, ic, ink);
+    } else if (m == 1) {
+        float cell = (4.0f + 0.30f * arSize) * sc;
+        float3 t = cross5(p_TexR, p_TexG, p_TexB, x, y, W, H, (int)(cell / 3.0f));
+        float k = 1.0f - _fmaxf(t.x, _fmaxf(t.y, t.z));
+        float dv = _fmaxf(1.0f - k, 0.001f);
+        float cc = (1.0f - t.x - k) / dv, mm = (1.0f - t.y - k) / dv, yy = (1.0f - t.z - k) / dv;
+        float kk = _powf(_saturatef(k), 1.8f - lvl);
+        float ic = screenInk(fx, fy, 0.2618f, cell, _saturatef(cc)), im = screenInk(fx, fy, 1.309f, cell, _saturatef(mm));
+        float iy = screenInk(fx, fy, 0.0f, cell, _saturatef(yy)), ik = screenInk(fx, fy, 0.7854f, cell, _saturatef(kk));
+        float r = (1.0f - 0.92f * ic) * (1.0f - 0.08f * im) * (1.0f - 0.85f * ik);
+        float g = (1.0f - 0.25f * ic) * (1.0f - 0.90f * im) * (1.0f - 0.06f * iy) * (1.0f - 0.85f * ik);
+        float b = (1.0f - 0.10f * ic) * (1.0f - 0.30f * im) * (1.0f - 0.92f * iy) * (1.0f - 0.85f * ik);
+        o = make_float3(paper0.x * r, paper0.y * g, paper0.z * b);
+    } else if (m == 3) {
+        float sp = (3.0f + 0.12f * arSize) * sc;
+        float3 t = cross5(p_TexR, p_TexG, p_TexB, x, y, W, H, (int)(2.0f * sc + 0.5f));
+        float dark = _saturatef((1.0f - luma(t.x, t.y, t.z)) * (0.7f + 0.6f * lvl));
+        float hw = (0.10f + 0.10f * lvl) * (0.6f + 0.8f * dark);
+        float ink = 0.85f * sstep(0.8f, 1.0f, dark);
+        for (int k = 0; k < 4; k++) {
+            float th = 0.15f + 0.2f * (float)(k);
+            float a2 = an + (k == 1 ? 1.5708f : (k == 2 ? 0.7854f : (k == 3 ? -0.7854f : 0.0f)));
+            float l = handLines(fx, fy, a2, sp, hw, bt + (float)(k) * 13.0f, sc, sd + (uint)(k) * 31u) * sstep(th, th + 0.08f, dark);
+            ink = _fmaxf(ink, l);
+        }
+        o = mix3a(paper, inkc, ink * 0.92f);
+    } else if (m == 4) {
+        float sp = (2.5f + 0.10f * arSize) * sc;
+        float3 t = cross5(p_TexR, p_TexG, p_TexB, x, y, W, H, (int)(2.0f * sc + 0.5f));
+        float3 bl = cross5(p_TexR, p_TexG, p_TexB, x, y, W, H, (int)(12.0f * sc + 0.5f));
+        float L = luma(t.x, t.y, t.z), Lb = luma(bl.x, bl.y, bl.z);
+        float dark = _saturatef((1.0f - L) * (0.7f + 0.6f * lvl));
+        float ca = _cosf(an), sa = _sinf(an);
+        float u = (fx * ca + fy * sa) / sp + Lb * 6.0f;
+        float d = _fabs(fr1(u) - 0.5f), w = 0.7f / sp;
+        float ink = 1.0f - sstep(0.5f * _powf(dark, 0.9f) - w, 0.5f * _powf(dark, 0.9f) + w, d);
+        ink *= sstep(0.0f, 0.03f, dark);
+        float a2 = an + 1.2217f, u2 = (fx * _cosf(a2) + fy * _sinf(a2)) / sp + Lb * 4.0f;
+        float d2 = _fabs(fr1(u2) - 0.5f), h2 = 0.5f * _saturatef((dark - 0.6f) / 0.4f);
+        ink = _fmaxf(ink, (1.0f - sstep(h2 - w, h2 + w, d2)) * sstep(0.6f, 0.65f, dark));
+        float3 sepia = mix3a(make_float3(0.16f, 0.10f, 0.06f), make_float3(c0.x * 0.4f, c0.y * 0.4f, c0.z * 0.4f), col);
+        o = mix3a(make_float3(paper0.x, paper0.y * 0.985f, paper0.z * 0.94f), sepia, ink);
+    } else if (m == 5) {
+        float e = edgeAt(p_TexR, p_TexG, p_TexB, x, y, W, H, (int)(1.5f * sc + 0.5f));
+        float jit = (fbm(fx / (40.0f * sc), fy / (40.0f * sc), bt, 2, sd + 5u) - 0.5f) * 0.05f;
+        float line = sstep(0.03f + jit, 0.03f + jit + 0.18f * (1.2f - lvl), e);
+        float3 t = cross5(p_TexR, p_TexG, p_TexB, x, y, W, H, (int)(3.0f * sc + 0.5f));
+        float dark = 1.0f - luma(t.x, t.y, t.z);
+        float sp = (3.0f + 0.10f * arSize) * sc;
+        float hatch = handLines(fx, fy, an, sp, 0.12f, bt, sc, sd + 41u) * sstep(0.45f, 0.75f, dark) * 0.55f;
+        float shade = 0.15f * sstep(0.2f, 0.9f, dark);
+        float g = _fmaxf(_fmaxf(line, hatch), shade);
+        float3 graph = mix3a(make_float3(0.22f, 0.22f, 0.24f), make_float3(c0.x * 0.5f, c0.y * 0.5f, c0.z * 0.5f), col);
+        o = mix3a(paper, graph, g * 0.9f);
+    } else if (m == 6) {
+        float3 s = cross5(p_TexR, p_TexG, p_TexB, x, y, W, H, (int)(2.5f * sc + 0.5f));
+        float3 s2 = cross5(p_TexR, p_TexG, p_TexB, x, y, W, H, (int)(5.0f * sc + 0.5f));
+        s = make_float3(0.5f * (s.x + s2.x), 0.5f * (s.y + s2.y), 0.5f * (s.z + s2.z));
+        float L = luma(s.x, s.y, s.z);
+        float n = 3.0f + _floorf(lvl * 5.0f + 0.5f);
+        float Lq = (_floorf(L * n) + 0.6f) / n;
+        float k = Lq / _fmaxf(L, 0.02f);
+        float3 q = make_float3(s.x * k, s.y * k, s.z * k);
+        float Lqq = luma(q.x, q.y, q.z), st = 1.0f + 0.5f * col;
+        q = make_float3(_saturatef(Lqq + (q.x - Lqq) * st), _saturatef(Lqq + (q.y - Lqq) * st), _saturatef(Lqq + (q.z - Lqq) * st));
+        float e = edgeAt(p_TexR, p_TexG, p_TexB, x, y, W, H, (int)(1.5f * sc + 0.5f));
+        float ink = sstep(0.07f, 0.16f, e);
+        o = mix3a(q, make_float3(0.04f, 0.035f, 0.05f), ink);
+    } else if (m == 7) {
+        float s = (8.0f + 0.6f * arSize) * sc;
+        float gx = fx / s, gy = fy / s;
+        int ix = (int)(_floorf(gx)), iy = (int)(_floorf(gy));
+        float f1 = 9.0f, f2 = 9.0f, sx = 0.0f, sy = 0.0f;
+        int bi = 0, bj = 0;
+        for (int j = -1; j <= 1; j++) {
+            for (int i = -1; i <= 1; i++) {
+                float px = (float)(ix + i) + 0.5f + (rnd3(ix + i, iy + j, sd + 1u) - 0.5f) * 0.8f;
+                float py = (float)(iy + j) + 0.5f + (rnd3(ix + i, iy + j, sd + 2u) - 0.5f) * 0.8f;
+                float dd = _sqrtf((gx - px) * (gx - px) + (gy - py) * (gy - py));
+                if (dd < f1) { f2 = f1; f1 = dd; sx = px; sy = py; bi = ix + i; bj = iy + j; }
+                else if (dd < f2) { f2 = dd; }
+            }
+        }
+        float3 tc = rgbAt(p_TexR, p_TexG, p_TexB, (int)(sx * s), (int)(sy * s), W, H);
+        float tv = 0.92f + 0.12f * rnd3(bi, bj, sd + 3u);
+        float bev = 1.0f - 0.18f * sstep(0.25f, 0.6f, f1);
+        float3 tile = make_float3(_saturatef(tc.x * tv * bev), _saturatef(tc.y * tv * bev), _saturatef(tc.z * tv * bev));
+        float gw = (1.0f + 4.0f * lvl) * sc / s, aw = 0.8f / s;
+        float grout = 1.0f - sstep(gw - aw, gw + aw, f2 - f1);
+        float3 gc = mix3a(make_float3(0.30f, 0.28f, 0.26f), make_float3(0.75f, 0.72f, 0.68f), arPaper / 100.0f);
+        o = mix3a(tile, gc, grout);
+    } else if (m == 8) {
+        float R = (1.0f + 0.30f * arSize) * sc;
+        float ra = R * _sqrtf(rnd3(x, y, sd + (uint)(bf) * 7u + 11u)), aa = 6.2831853f * rnd3(x, y, sd + (uint)(bf) * 7u + 12u);
+        o = rgbAt(p_TexR, p_TexG, p_TexB, x + (int)(_round(ra * _cosf(aa))), y + (int)(_round(ra * _sinf(aa))), W, H);
+    } else {
+        float n = 2.0f + _floorf(lvl * 4.0f + 0.5f);
+        int cell = (int)(1.0f + sc);
+        float t = bayer8((int)(x / cell), (int)(y / cell));
+        float lv = n - 1.0f;
+        o = make_float3(_floorf(_saturatef(c0.x) * lv + t) / lv, _floorf(_saturatef(c0.y) * lv + t) / lv, _floorf(_saturatef(c0.z) * lv + t) / lv);
+    }
+    float a = arAmount / 100.0f;
+    return make_float3(_saturatef(lerp1(c0.x, o.x, a)), _saturatef(lerp1(c0.y, o.y, a)), _saturatef(lerp1(c0.z, o.z, a)));
+}

@@ -1,0 +1,162 @@
+// Develop Print: negative and print film emulation, with bleach bypass and a tinted black flare.
+// Linear light times 1/8 in and out (the Bloom chain's convention): it sits between the Bloom Layer Mixer and Bloom
+// Encode, so light the bloom pushed past white reaches it whole, or between Bloom Linear and Bloom Encode in a look
+// without Bloom. Parametric curves only, no stock data.
+//
+// Rec.709 footage tops out at white, so the brightest light is first read as Highlight Range stops above grey (the
+// max channel above a knee 1.5 stops over grey, colour ratios kept), the way an inverse tone map treats display
+// white. The print itself is a negative (gamma 0.6 with a latitude that softens both ends), printer lights, a print
+// curve (logistic in log exposure, density 0.06 to 3.9, slope 2.5 at its middle, a little under the cinema's 2.8
+// for a screen in a dim room), retained silver for bleach bypass, and projection. It runs two ways, and both carry
+// the dyes' interimage crosstalk and side absorptions (on the distance from neutral, in rows summing to one, so
+// greys stay grey). The tone path puts the brightest channel through the print and scales the colour's ratios by
+// it, so colour keeps its hue and saturation (apart from the dyes' twist) and a deep blue stays blue; Path to White turns only light pushed
+// past white toward white. The film path puts each channel through the print: film's own colour, which turns
+// bright colour toward white and deep colour toward the print's floor. Print Colour blends the two in log terms.
+// Then the black flare in the Flare Hue (the colour wheel of Develop's Shadows Hue). Grey 0.18 prints to 0.18 (times
+// Print Exposure); the brightest light approaches white and never passes it. Print mixes the result with the input
+// in display terms (gamma 2.4). With Print at 0 the input comes back untouched. MIT License.
+
+DEFINE_UI_PARAMS(prAmt,      Print,                 DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(prColour,   Print Colour,          DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(prPathW,    Print Path to White,   DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(prExp,      Print Exposure,        DCTLUI_SLIDER_FLOAT, 0.0, -2.0, 2.0, 0.05)
+DEFINE_UI_PARAMS(prContr,    Print Contrast,        DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(prRange,    Print Highlight Range, DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(prLat,      Negative Latitude,     DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(prCross,    Dye Crosstalk,         DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(prRed,      Print Red,             DCTLUI_SLIDER_FLOAT, 0.0, -12.0, 12.0, 0.5)
+DEFINE_UI_PARAMS(prGreen,    Print Green,           DCTLUI_SLIDER_FLOAT, 0.0, -12.0, 12.0, 0.5)
+DEFINE_UI_PARAMS(prBlue,     Print Blue,            DCTLUI_SLIDER_FLOAT, 0.0, -12.0, 12.0, 0.5)
+DEFINE_UI_PARAMS(prSilver,   Silver Retention,      DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(prFlare,    Black Flare,           DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(prFlareHue, Flare Hue,             DCTLUI_SLIDER_FLOAT, 245.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(prFlareSat, Flare Saturation,      DCTLUI_SLIDER_FLOAT, 35.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Print, "0 is off; how much of the film print look the picture takes")
+DEFINE_UI_TOOLTIP(Print Colour, "0 keeps the colour of the footage under the print tone, apart from the Dye Crosstalk twist; 100 is film colour per channel: bright colour toward white, deep colour toward the floor")
+DEFINE_UI_TOOLTIP(Print Path to White, "Light pushed past white turns toward white, fully two stops over; colour inside the range of the footage keeps its colour")
+DEFINE_UI_TOOLTIP(Print Exposure, "Printer lights for the whole picture, in stops: grey moves by exactly this much")
+DEFINE_UI_TOOLTIP(Print Contrast, "Slope of the print curve: 0 is 2.5 at its middle; the shadows feel it most")
+DEFINE_UI_TOOLTIP(Print Highlight Range, "Stops above grey that white in the footage stands for (0 is 2.5, 100 is 8.5); higher keeps whites brighter")
+DEFINE_UI_TOOLTIP(Negative Latitude, "How far the negative holds detail at both ends before it softens them")
+DEFINE_UI_TOOLTIP(Dye Crosstalk, "Crosstalk and impurities of the dyes: a small hue twist and a little less chroma at any Print Colour; 0 is none")
+DEFINE_UI_TOOLTIP(Print Red, "Printer light in points (1 point is 0.025 log exposure on the print); positive adds red")
+DEFINE_UI_TOOLTIP(Print Green, "Printer light in points (1 point is 0.025 log exposure on the print); positive adds green")
+DEFINE_UI_TOOLTIP(Print Blue, "Printer light in points (1 point is 0.025 log exposure on the print); positive adds blue")
+DEFINE_UI_TOOLTIP(Silver Retention, "Bleach bypass: silver left in the print deepens the shadows; with Print Colour above 0 it quiets colour too")
+DEFINE_UI_TOOLTIP(Black Flare, "Projector flare: lifts the blacks, up to 1% of white at 100")
+DEFINE_UI_TOOLTIP(Flare Hue, "Colour of the flare, on the same wheel as the Shadows Hue of Develop (245 is indigo)")
+DEFINE_UI_TOOLTIP(Flare Saturation, "How strongly the flare carries its hue")
+
+__DEVICE__ float luma(float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; }
+
+__DEVICE__ float3 hueDir(float hDeg)
+{
+    float h = _fmod(hDeg, 360.0f) / 60.0f;
+    float x = 1.0f - _fabs(_fmod(h, 2.0f) - 1.0f);
+    float r = 0.0f, g = 0.0f, b = 0.0f;
+    if (h < 1.0f)      { r = 1.0f; g = x; }
+    else if (h < 2.0f) { r = x; g = 1.0f; }
+    else if (h < 3.0f) { g = 1.0f; b = x; }
+    else if (h < 4.0f) { g = x; b = 1.0f; }
+    else if (h < 5.0f) { r = x; b = 1.0f; }
+    else               { r = 1.0f; b = x; }
+    float y = luma(r, g, b);
+    return make_float3(r - y, g - y, b - y);
+}
+
+__DEVICE__ float softKnee(float z, float w)
+{
+    float t = z / w;
+    return t > 30.0f ? z : w * _log2f(1.0f + _exp2f(t));
+}
+
+__DEVICE__ float tanhS(float x) { return 1.0f - 2.0f / (_expf(2.0f * x) + 1.0f); }
+
+__DEVICE__ float negative(float x, float an) { return an * tanhS(0.6f * _log10f(_fmaxf(x, 1e-9f) / 0.18f) / an); }
+
+__DEVICE__ float printD(float n, float kp, float l0) { return 3.84f / (1.0f + _expf(-kp * (l0 - n))); }
+
+__DEVICE__ float toDisp(float x) { return _powf(_fmaxf(x, 0.0f), 1.0f / 2.4f); }
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float r = _tex2D(p_TexR, p_X, p_Y), g = _tex2D(p_TexG, p_X, p_Y), b = _tex2D(p_TexB, p_X, p_Y);
+    if (prAmt <= 0.0f)
+    {
+        return make_float3(r, g, b);
+    }
+    float lr = _fmaxf(r * 8.0f, 0.0f), lg = _fmaxf(g * 8.0f, 0.0f), lb = _fmaxf(b * 8.0f, 0.0f);
+
+    float er = lr * _exp10f(0.025f / 0.6f * prRed), eg = lg * _exp10f(0.025f / 0.6f * prGreen), eb = lb * _exp10f(0.025f / 0.6f * prBlue);
+
+    float mx = _fmaxf(_fmaxf(er, _fmaxf(eg, eb)), 1e-9f);
+    float ex = 6.0f * prRange / 100.0f;
+    float m = 1.0f;
+    if (ex > 0.0f)
+    {
+        float k0 = softKnee(-1.5f, 0.3f);
+        float gain = ex / (softKnee(2.4739312f - 1.5f, 0.3f) - k0);
+        m = _exp2f(gain * (softKnee(_log2f(mx) + 2.4739312f - 1.5f, 0.3f) - k0));
+    }
+
+    float an = 1.4f * _exp2f((prLat - 50.0f) / 50.0f);
+    float kp = 4.0f * 2.5f * _exp2f(0.5f * prContr / 100.0f) / 3.84f;
+    float sil = 1.0f + 0.8f * prSilver / 100.0f;
+    float fl = 0.01f * prFlare / 100.0f;
+    float3 dir = hueDir(prFlareHue);
+    float fs = prFlareSat / 100.0f;
+    float tr = 1.0f + fs * dir.x, tg = 1.0f + fs * dir.y, tb = 1.0f + fs * dir.z;
+    float fd = 1.0f + fl * _fmaxf(tr, _fmaxf(tg, tb));
+    float aim = 0.18f * _exp2f(prExp);
+    float sgrey = _clampf(-_log10f(aim * fd - fl) / (sil * 3.84f), 1e-4f, 0.9999f);
+    float l0 = _log2f(sgrey / (1.0f - sgrey)) * 0.69314718f / kp;
+
+    float xt = prCross / 50.0f;
+    float a01 = 0.06f * xt, a02 = 0.02f * xt, a10 = 0.12f * xt, a12 = 0.08f * xt, a20 = 0.03f * xt, a21 = 0.22f * xt;
+
+    float tn = _exp10f(-sil * printD(negative(mx * m, an), kp, l0));
+    float ur = -_log10f((er + 1e-9f) / (mx + 1e-9f));
+    float ug = -_log10f((eg + 1e-9f) / (mx + 1e-9f));
+    float ub = -_log10f((eb + 1e-9f) / (mx + 1e-9f));
+    float br = tanhS(ur), bg = tanhS(ug), bb = tanhS(ub);
+    float um = (br + bg + bb) / 3.0f;
+    float tr0 = br + xt * (-0.06f * (bg - um) - 0.02f * (bb - um));
+    float tg0 = bg + xt * (-0.08f * (br - um) - 0.06f * (bb - um));
+    float tb0 = bb + xt * (-0.02f * (br - um) - 0.10f * (bg - um));
+    float wr = (tr0 + a01 * tg0 + a02 * tb0) / (1.0f + a01 + a02) - br + ur;
+    float wg = (a10 * tr0 + tg0 + a12 * tb0) / (1.0f + a10 + a12) - bg + ug;
+    float wb = (a20 * tr0 + a21 * tg0 + tb0) / (1.0f + a20 + a21) - bb + ub;
+    float wmin = _fminf(wr, _fminf(wg, wb));
+    float pw = _saturatef(_log2f(mx) * 0.5f);
+    pw = pw * pw * (3.0f - 2.0f * pw) * prPathW / 100.0f;
+    float hr = _fmaxf(tn * _exp10f((wmin - wr) * (1.0f - pw)), 1e-12f);
+    float hg = _fmaxf(tn * _exp10f((wmin - wg) * (1.0f - pw)), 1e-12f);
+    float hb = _fmaxf(tn * _exp10f((wmin - wb) * (1.0f - pw)), 1e-12f);
+
+    float nr = negative(er * m, an), ng = negative(eg * m, an), nb = negative(eb * m, an);
+    float nm = (nr + ng + nb) / 3.0f;
+    float dr = nr - nm, dg = ng - nm, db = nb - nm;
+    float Dr = printD(nr + xt * (-0.06f * dg - 0.02f * db), kp, l0);
+    float Dg = printD(ng + xt * (-0.08f * dr - 0.06f * db), kp, l0);
+    float Db = printD(nb + xt * (-0.02f * dr - 0.10f * dg), kp, l0);
+    float vr = (Dr + a01 * Dg + a02 * Db) / (1.0f + a01 + a02);
+    float vg = (a10 * Dr + Dg + a12 * Db) / (1.0f + a10 + a12);
+    float vb = (a20 * Dr + a21 * Dg + Db) / (1.0f + a20 + a21);
+    float ds = (sil - 1.0f) * (Dr + Dg + Db) / 3.0f;
+    float pr = _exp10f(-(vr + ds)), pg = _exp10f(-(vg + ds)), pb = _exp10f(-(vb + ds));
+
+    float c = prColour / 100.0f;
+    float qr = _exp2f(_log2f(hr) + c * (_log2f(pr) - _log2f(hr)));
+    float qg = _exp2f(_log2f(hg) + c * (_log2f(pg) - _log2f(hg)));
+    float qb = _exp2f(_log2f(hb) + c * (_log2f(pb) - _log2f(hb)));
+    qr = (qr + fl * tr) / fd; qg = (qg + fl * tg) / fd; qb = (qb + fl * tb) / fd;
+
+    float s = _fminf(prAmt, 100.0f) / 100.0f;
+    float or_ = toDisp(lr), og = toDisp(lg), ob = toDisp(lb);
+    or_ += s * (toDisp(qr) - or_);
+    og += s * (toDisp(qg) - og);
+    ob += s * (toDisp(qb) - ob);
+    return make_float3(_powf(or_, 2.4f) * 0.125f, _powf(og, 2.4f) * 0.125f, _powf(ob, 2.4f) * 0.125f);
+}

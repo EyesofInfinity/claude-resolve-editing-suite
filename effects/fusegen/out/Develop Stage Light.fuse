@@ -1,0 +1,1056 @@
+--[[ Develop Stage Light as a Fusion Fuse: the transform DCTL effects/stage/build/Develop Stage Light.dctl run on the GPU through DVIPComputeNode,
+every pixel calling the DCTL's own main function with the DCTL's own controls. Written by
+effects/fusegen/fusegen.py; regenerate it, never edit it. The picture is read and written in the values
+the DCTL sees in Resolve (Rec.709 gamma 2.4 display values in Develop), with no conversion.
+Frame Offset adds to the comp frame for the DCTL's frame value; Hold Frame uses Frame Offset alone.
+If the kernel cannot run, the output is solid magenta and the reason is in the Fusion console, in the
+tool's data DevelopFuse.Status and in %TEMP%\DevelopFuse.log. MIT License. ]]
+
+FuRegisterClass("DevelopStageLight", CT_Tool, {
+	REGS_Category = "Fuses\\Develop",
+	REGS_OpIconString = "DSL",
+	REGS_OpDescription = "Develop Stage Light (Develop DCTL in a Fuse)",
+	REG_NoObjMatCtrls = true,
+	REG_NoMotionBlurCtrls = true,
+	})
+
+DvName = "Develop Stage Light"
+DvKind = "transform"
+DvDctl = "stage/build/Develop Stage Light.dctl"
+
+-- the DCTL slider steps, for the record and the inverse mapping (Fusion sliders have no step)
+DvSteps = { slAmount = 1.0, slMode = 1.0, slX = 1.0, slY = 1.0, slSize = 1.0, slAspect = 1.0, slAngle = 1.0, slSoft = 1.0, slLight = 0.1, slAmb = 0.1, slGel = 1.0, slSat = 1.0, slHue = 1.0, slSpread = 1.0, slBeams = 1.0, slRigY = 1.0, slRig = 1.0, slFan = 1.0, slHaze = 1.0, slDepth = 1.0, slLand = 1.0, slSweep = 1.0, slSpeed = 1.0, slSeed = 1.0 }
+
+-- this Fuse's own C names for its kernels and parameter structs (never shared with another Fuse)
+DvKernelName = "DevelopStageLightK4aec36d6"
+DvParamsName = "DevelopStageLightP4aec36d6"
+DvSplitName = "DevelopStageLightS4aec36d6"
+DvSplitParamsName = "DevelopStageLightSP4aec36d6"
+
+DvParams = [[
+	float slAmount;
+	float slMode;
+	float slX;
+	float slY;
+	float slSize;
+	float slAspect;
+	float slAngle;
+	float slSoft;
+	float slLight;
+	float slAmb;
+	float slGel;
+	float slSat;
+	float slHue;
+	float slSpread;
+	float slBeams;
+	float slRigY;
+	float slRig;
+	float slFan;
+	float slHaze;
+	float slDepth;
+	float slLand;
+	float slSweep;
+	float slSpeed;
+	float slSeed;
+	float dvProgress;
+	int dvFrame;
+	int dvFlipY;
+	int dvSize[2];
+]]
+
+DvSplitParams = [[
+	int ch;
+	int flipY;
+	int size[2];
+]]
+
+DvSplitSource = [[
+// one channel of an image as its own texture (the channel in every component), rows turned top-down when
+// flipY is set, so a DCTL's _tex2D(plane, x, y) reads what Resolve hands it
+__KERNEL__ void DevelopStageLightS4aec36d6(__CONSTANTREF__ DevelopStageLightSP4aec36d6 *params, __TEXTURE2D__ src, __TEXTURE2D_WRITE__ dst)
+{
+    DEFINE_KERNEL_ITERATORS_XY(x, y)
+    if (x < params->size[0] && y < params->size[1])
+    {
+        int sy = params->flipY != 0 ? params->size[1] - 1 - y : y;
+        float4 c = _tex2DVec4(src, x, sy);
+        float v = params->ch == 0 ? c.x : (params->ch == 1 ? c.y : (params->ch == 2 ? c.z : c.w));
+        _tex2DVec4Write(dst, x, y, to_float4(v, v, v, v));
+    }
+}
+]]
+
+DvMath = [[
+// fusegen dctl math (README section 2): the argument casts Resolve gives a DCTL on OpenCL and Metal
+#if !defined(KERNEL_TYPE_IS_DCTL) && defined(DEVICE_IS_OPENCL)
+#undef _fabs
+#define _fabs(_A) fabs((float)(_A))
+#undef _powf
+#define _powf(_A, _B) native_powr((float)(_A), (float)(_B))
+#undef _logf
+#define _logf(_A) native_log((float)(_A))
+#undef _log2f
+#define _log2f(_A) native_log2((float)(_A))
+#undef _log10f
+#define _log10f(_A) native_log10((float)(_A))
+#undef _expf
+#define _expf(_A) native_exp((float)(_A))
+#undef _exp2f
+#define _exp2f(_A) native_exp2((float)(_A))
+#undef _exp10f
+#define _exp10f(_A) native_exp10((float)(_A))
+#undef _copysignf
+#define _copysignf(_A, _B) copysign((float)(_A), (float)(_B))
+#undef _fmaxf
+#define _fmaxf(_A, _B) fmax((float)(_A), (float)(_B))
+#undef _fminf
+#define _fminf(_A, _B) fmin((float)(_A), (float)(_B))
+#undef _clampf
+#define _clampf(_A, _B, _C) clamp((float)(_A), (float)(_B), (float)(_C))
+#undef _sqrtf
+#define _sqrtf(_A) native_sqrt((float)(_A))
+#undef _ceilf
+#define _ceilf(_A) ceil((float)(_A))
+#undef _floorf
+#define _floorf(_A) floor((float)(_A))
+#undef _fmod
+#define _fmod(_A, _B) fmod((float)(_A), (float)(_B))
+#undef _round
+#define _round(_A) round((float)(_A))
+#undef _atan2f
+#define _atan2f(_A, _B) atan2((float)(_A), (float)(_B))
+#undef _sinf
+#define _sinf(_A) native_sin((float)(_A))
+#undef _cosf
+#define _cosf(_A) native_cos((float)(_A))
+#undef _tanf
+#define _tanf(_A) native_tan((float)(_A))
+#undef _acosf
+#define _acosf(_A) acos((float)(_A))
+#undef _asinf
+#define _asinf(_A) asin((float)(_A))
+#undef _sinpif
+#define _sinpif(_A) sinpi((float)(_A))
+#undef _cospif
+#define _cospif(_A) cospi((float)(_A))
+#undef _acoshf
+#define _acoshf(_A) acosh((float)(_A))
+#undef _asinhf
+#define _asinhf(_A) asinh((float)(_A))
+#undef _atanhf
+#define _atanhf(_A) atanh((float)(_A))
+#undef _coshf
+#define _coshf(_A) cosh((float)(_A))
+#undef _sinhf
+#define _sinhf(_A) sinh((float)(_A))
+#undef _tanhf
+#define _tanhf(_A) tanh((float)(_A))
+#undef _truncf
+#define _truncf(_A) trunc((float)(_A))
+#undef _fdimf
+#define _fdimf(_A, _B) fdim((float)(_A), (float)(_B))
+#undef _fmaf
+#define _fmaf(_A, _B, _C) fma((float)(_A), (float)(_B), (float)(_C))
+#undef _rsqrtf
+#define _rsqrtf(_A) rsqrt((float)(_A))
+#undef _saturatef
+#define _saturatef(_A) clamp((float)(_A), 0.0f, 1.0f)
+#undef _hypotf
+#define _hypotf(_A, _B) hypot((float)(_A), (float)(_B))
+#elif !defined(KERNEL_TYPE_IS_DCTL) && defined(DEVICE_IS_METAL)
+#undef _fabs
+#define _fabs(_A) fabs((float)(_A))
+#undef _powf
+#define _powf(_A, _B) pow((float)(_A), (float)(_B))
+#undef _logf
+#define _logf(_A) log((float)(_A))
+#undef _log2f
+#define _log2f(_A) log2((float)(_A))
+#undef _log10f
+#define _log10f(_A) log10((float)(_A))
+#undef _expf
+#define _expf(_A) exp((float)(_A))
+#undef _exp2f
+#define _exp2f(_A) exp2((float)(_A))
+#undef _exp10f
+#define _exp10f(_A) exp10((float)(_A))
+#undef _copysignf
+#define _copysignf(_A, _B) copysign((float)(_A), (float)(_B))
+#undef _fmaxf
+#define _fmaxf(_A, _B) fmax((float)(_A), (float)(_B))
+#undef _fminf
+#define _fminf(_A, _B) fmin((float)(_A), (float)(_B))
+#undef _clampf
+#define _clampf(_A, _B, _C) clamp((float)(_A), (float)(_B), (float)(_C))
+#undef _sqrtf
+#define _sqrtf(_A) sqrt((float)(_A))
+#undef _ceilf
+#define _ceilf(_A) ceil((float)(_A))
+#undef _floorf
+#define _floorf(_A) floor((float)(_A))
+#undef _fmod
+#define _fmod(_A, _B) fmod((float)(_A), (float)(_B))
+#undef _round
+#define _round(_A) round((float)(_A))
+#undef _atan2f
+#define _atan2f(_A, _B) atan2((float)(_A), (float)(_B))
+#undef _sinf
+#define _sinf(_A) sin((float)(_A))
+#undef _cosf
+#define _cosf(_A) cos((float)(_A))
+#undef _tanf
+#define _tanf(_A) tan((float)(_A))
+#undef _acosf
+#define _acosf(_A) acos((float)(_A))
+#undef _asinf
+#define _asinf(_A) asin((float)(_A))
+#undef _sinpif
+#define _sinpif(_A) sinpi((float)(_A))
+#undef _cospif
+#define _cospif(_A) cospi((float)(_A))
+#undef _acoshf
+#define _acoshf(_A) acosh((float)(_A))
+#undef _asinhf
+#define _asinhf(_A) asinh((float)(_A))
+#undef _atanhf
+#define _atanhf(_A) atanh((float)(_A))
+#undef _coshf
+#define _coshf(_A) cosh((float)(_A))
+#undef _sinhf
+#define _sinhf(_A) sinh((float)(_A))
+#undef _tanhf
+#define _tanhf(_A) tanh((float)(_A))
+#undef _truncf
+#define _truncf(_A) trunc((float)(_A))
+#undef _fdimf
+#define _fdimf(_A, _B) fdim((float)(_A), (float)(_B))
+#undef _fmaf
+#define _fmaf(_A, _B, _C) fma((float)(_A), (float)(_B), (float)(_C))
+#undef _rsqrtf
+#define _rsqrtf(_A) rsqrt((float)(_A))
+#undef _saturatef
+#define _saturatef(_A) saturate((float)(_A))
+#undef _hypotf
+#define _hypotf(_A, _B) sqrt((float)(_A) * (float)(_A) + (float)(_B) * (float)(_B))
+#endif
+]]
+
+DvMapping = [[
+// fusegen mapping (effects/fusegen/README.md section 2): a DCTL reads one channel with _tex2D(plane, x, y);
+// here each plane is a texture holding that channel, read at whole-pixel coordinates by the default sampler
+#define dvTex2D(dv_t, dv_x, dv_y) (_tex2DVec4((dv_t), (dv_x), (dv_y)).x)
+]]
+
+DvCompat = [[
+// fusegen compatibility, used only when the plain source does not build: Resolve's DCTL names for the vector
+// constructors, over Fusion's own
+#ifndef make_float2
+#define make_float2(a, b) to_float2((a), (b))
+#endif
+#ifndef make_float3
+#define make_float3(a, b, c) to_float3((a), (b), (c))
+#endif
+#ifndef make_float4
+#define make_float4(a, b, c, d) to_float4((a), (b), (c), (d))
+#endif
+]]
+
+DvKernelText = [[
+// Develop Stage Light: a lamp on a stand, a hole cut in the light, and a rig of lamps through haze, in one transform
+// DCTL, each built from what a lamp does to a scene:
+//   0 Spotlight: a pool of light at Position, its size and shape (Size, Aspect, Angle) and a soft penumbra (Softness).
+//     The picture is relit: multiplied up by Light (stops) inside the pool, a little hotter at its centre as a lamp's
+//     field is, coloured by its gel (Gel warm or cold, Colour and Hue for a coloured gel); outside it falls to Ambient
+//     (stops). Black stays black; nothing is added.
+//   1 Reverse Spotlight: the same pool cut out of the light, as a flag would: the pool falls to Ambient, the rest of the
+//     frame takes Light and the gel.
+//   2 Stage Light: Beams lamps hung on a rig at Position X and Rig Y (above the frame by default), Rig Width apart,
+//     aimed at Angle and fanned by Fan, each a cone Size wide. Their light is seen in the haze: the haze is lit only
+//     inside each cone, brightest near the lamp and thinning as the cone spreads, drifting smoke and streaks moving
+//     through it by dvFrame. Where a beam meets the floor (Landing) the picture is lit in a pool, and a
+//     little all along the cone; the rest of the stage falls to Ambient. Sweep and Speed swing the beams.
+// Light is added in linear and the picture relit by multiplying, so the haze lifts black only inside a beam. Amount
+// mixes with the picture in display terms; Amount 0 is the input exactly. An OpenFX DCTL effect or a DCTL plugin node.
+// MIT License.
+
+// fusegen ui: slAmount
+// fusegen ui: slMode
+// fusegen ui: slX
+// fusegen ui: slY
+// fusegen ui: slSize
+// fusegen ui: slAspect
+// fusegen ui: slAngle
+// fusegen ui: slSoft
+// fusegen ui: slLight
+// fusegen ui: slAmb
+// fusegen ui: slGel
+// fusegen ui: slSat
+// fusegen ui: slHue
+// fusegen ui: slSpread
+// fusegen ui: slBeams
+// fusegen ui: slRigY
+// fusegen ui: slRig
+// fusegen ui: slFan
+// fusegen ui: slHaze
+// fusegen ui: slDepth
+// fusegen ui: slLand
+// fusegen ui: slSweep
+// fusegen ui: slSpeed
+// fusegen ui: slSeed
+
+// fusegen tip: Mode
+// fusegen tip: Light
+// fusegen tip: Ambient
+// fusegen tip: Gel
+// fusegen tip: Colour
+// fusegen tip: Angle
+// fusegen tip: Size
+// fusegen tip: Depth
+// fusegen tip: Landing
+
+// Develop light: the shared code of Develop Leak, Develop Burn and Develop Light Dissolve.
+// build.py writes it into each effect, so every installed .dctl stands alone. Rec.709 gamma 2.4 in and out;
+// light is added in linear. Coordinates are in frame heights (y 0 to 1 top to bottom, x 0 to width/height),
+// so a leak keeps its shape at any resolution and aspect. MIT License.
+
+__DEVICE__ float toLin(float x) { return _powf(_fmaxf(x, 0.0f), 2.4f); }
+__DEVICE__ float toDisp(float x) { return _powf(_fmaxf(x, 0.0f), 1.0f / 2.4f); }
+__DEVICE__ float luma(float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; }
+__DEVICE__ float lerp1(float a, float b, float t) { return a + (b - a) * t; }
+__DEVICE__ float sstep(float a, float b, float x) { float t = _saturatef((x - a) / (b - a)); return t * t * (3.0f - 2.0f * t); }
+
+__DEVICE__ float3 shoulder(float r, float g, float b)
+{
+    float m = _fmaxf(r, _fmaxf(g, b));
+    if (m <= 0.8f) return make_float3(r, g, b);
+    float nm = 0.8f + 0.2f * _tanhf((m - 0.8f) / 0.2f);
+    float k = nm / m, w = 0.6f * sstep(1.0f, 3.0f, m);
+    return make_float3(lerp1(r * k, nm, w), lerp1(g * k, nm, w), lerp1(b * k, nm, w));
+}
+
+__DEVICE__ float3 lightOut(float r, float g, float b, float k)
+{
+    float3 s = shoulder(r, g, b);
+    float w = _saturatef(k * 4.0f);
+    return make_float3(_saturatef(toDisp(lerp1(r, s.x, w))), _saturatef(toDisp(lerp1(g, s.y, w))), _saturatef(toDisp(lerp1(b, s.z, w))));
+}
+
+__DEVICE__ float hash01(uint x, uint y, uint z)
+{
+    x = x * 1664525u + 1013904223u; y = y * 1664525u + 1013904223u; z = z * 1664525u + 1013904223u;
+    x += y * z; y += z * x; z += x * y;
+    x ^= x >> 16u; y ^= y >> 16u; z ^= z >> 16u;
+    x += y * z; y += z * x; z += x * y;
+    return (float)(x >> 8u) * (1.0f / 16777216.0f);
+}
+
+__DEVICE__ float fade(float t) { return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f); }
+
+__DEVICE__ float vnoise3(float x, float y, float z, uint s)
+{
+    int ix = (int)(x), iy = (int)(y), iz = (int)(z);
+    float tx = fade(x - (float)(ix)), ty = fade(y - (float)(iy)), tz = fade(z - (float)(iz));
+    uint x0 = (uint)(ix), y0 = (uint)(iy), z0 = (uint)(iz) + s * 7919u;
+    float a0 = lerp1(lerp1(hash01(x0, y0, z0), hash01(x0 + 1u, y0, z0), tx), lerp1(hash01(x0, y0 + 1u, z0), hash01(x0 + 1u, y0 + 1u, z0), tx), ty);
+    float a1 = lerp1(lerp1(hash01(x0, y0, z0 + 1u), hash01(x0 + 1u, y0, z0 + 1u), tx), lerp1(hash01(x0, y0 + 1u, z0 + 1u), hash01(x0 + 1u, y0 + 1u, z0 + 1u), tx), ty);
+    return lerp1(a0, a1, tz);
+}
+
+__DEVICE__ float fbm(float x, float y, float z, int n, uint s)
+{
+    float sum = 0.0f, amp = 0.5f, tot = 0.0f, f = 1.0f;
+    for (int i = 0; i < 5; i++) {
+        if (i >= n) break;
+        sum += amp * vnoise3(x * f + 4096.0f + 37.1f * (float)(i), y * f + 4096.0f + 11.7f * (float)(i), z * f + 4096.0f, s + (uint)(i));
+        tot += amp; amp *= 0.5f; f *= 2.03f;
+    }
+    float v = sum / tot;
+    return _saturatef((v - 0.5f) * 1.6f + 0.5f);
+}
+
+__DEVICE__ float3 ramp(float pal, float t, float age)
+{
+    int p = (int)(pal + 0.5f);
+    float c0r = 0.30f, c0g = 0.10f, c0b = 0.42f, c1r = 0.62f, c1g = 0.35f, c1b = 0.47f, c2r = 0.86f, c2g = 0.76f, c2b = 0.68f;
+    float h0r = 0.73f, h0g = 0.16f, h0b = 0.26f, h1r = 0.89f, h1g = 0.35f, h1b = 0.17f, h2r = 0.94f, h2g = 0.50f, h2b = 0.22f;
+    if (p == 1) {
+        c0r = 0.45f; c0g = 0.08f; c0b = 0.05f; c1r = 0.85f; c1g = 0.30f; c1b = 0.08f; c2r = 0.98f; c2g = 0.70f; c2b = 0.35f;
+        h0r = 0.80f; h0g = 0.20f; h0b = 0.04f; h1r = 0.98f; h1g = 0.55f; h1b = 0.12f; h2r = 1.00f; h2g = 0.85f; h2b = 0.55f;
+    }
+    if (p == 2) {
+        c0r = 0.18f; c0g = 0.10f; c0b = 0.45f; c1r = 0.65f; c1g = 0.25f; c1b = 0.65f; c2r = 0.95f; c2g = 0.70f; c2b = 0.75f;
+        h0r = 0.70f; h0g = 0.15f; h0b = 0.50f; h1r = 0.95f; h1g = 0.45f; h1b = 0.45f; h2r = 1.00f; h2g = 0.75f; h2b = 0.55f;
+    }
+    if (p == 3) {
+        c0r = 0.05f; c0g = 0.10f; c0b = 0.35f; c1r = 0.15f; c1g = 0.40f; c1b = 0.75f; c2r = 0.70f; c2g = 0.85f; c2b = 0.98f;
+        h0r = 0.10f; h0g = 0.25f; h0b = 0.60f; h1r = 0.35f; h1g = 0.65f; h1b = 0.95f; h2r = 0.85f; h2g = 0.95f; h2b = 1.00f;
+    }
+    float a = _saturatef(age);
+    float r0 = lerp1(c0r, h0r, a), g0 = lerp1(c0g, h0g, a), b0 = lerp1(c0b, h0b, a);
+    float r1 = lerp1(c1r, h1r, a), g1 = lerp1(c1g, h1g, a), b1 = lerp1(c1b, h1b, a);
+    float r2 = lerp1(c2r, h2r, a), g2 = lerp1(c2g, h2g, a), b2 = lerp1(c2b, h2b, a);
+    float u = _saturatef(t);
+    float r, g, b;
+    if (u < 0.5f) { float k = u * 2.0f; r = lerp1(r0, r1, k); g = lerp1(g0, g1, k); b = lerp1(b0, b1, k); }
+    else { float k = u * 2.0f - 1.0f; r = lerp1(r1, r2, k); g = lerp1(g1, g2, k); b = lerp1(b1, b2, k); }
+    float hot = sstep(1.0f, 1.4f, t);
+    return make_float3(toLin(lerp1(r, 1.0f, hot)), toLin(lerp1(g, 0.96f, hot)), toLin(lerp1(b, 0.90f, hot)));
+}
+
+__DEVICE__ float leakField(float x, float y, float aspect, float deg, float w, float sc, float z, uint s)
+{
+    float a = deg * 0.0174533f, ca = _cosf(a), sa = _sinf(a);
+    float ext = 0.5f * (_fabs(ca) * aspect + _fabs(sa));
+    float sproj = (x - 0.5f * aspect) * ca + (y - 0.5f) * sa;
+    float warp = fbm(x * 1.3f, y * 1.3f, z * 0.35f, 2, s + 40u) - 0.5f;
+    float d = _fmaxf(ext - sproj + 0.45f * warp * w * aspect, 0.0f);
+    float reach = _fmaxf(w * aspect, 0.02f);
+    float e = _expf(-(d / reach) * (d / reach));
+    float cloud = fbm(x / sc, y / sc, z, 3, s);
+    return _saturatef(e * (0.35f + 1.3f * cloud));
+}
+
+__DEVICE__ float burnHeat(float x, float y, float cover, float sc, float z, uint s)
+{
+    float wx = fbm(x / sc * 0.7f, y / sc * 0.7f, z * 0.6f, 2, s + 90u) - 0.5f;
+    float wy = fbm(x / sc * 0.7f + 31.0f, y / sc * 0.7f, z * 0.6f, 2, s + 91u) - 0.5f;
+    float h = fbm((x + 0.6f * wx) / sc, (y + 0.6f * wy) / sc, z, 4, s);
+    float th = 1.0f - cover;
+    return _saturatef((h - th + 0.28f) / 0.62f);
+}
+
+__DEVICE__ float dust(int px, int py, int h, float amount, uint z)
+{
+    float sc = (float)(h) / 1080.0f;
+    int cx = (int)((float)(px) / (2.5f * sc)), cy = (int)((float)(py) / (2.5f * sc));
+    float r = hash01((uint)(cx), (uint)(cy), z * 13u + 5u);
+    float lim = 0.00002f * amount;
+    if (r > lim) return 0.0f;
+    return hash01((uint)(cx), (uint)(cy), z * 13u + 6u) < 0.6f ? -1.0f : 1.0f;
+}
+
+__DEVICE__ float4 burnOver(float r, float g, float b, float x, float y, float aspect, int px, int py, int ph,
+                           float cover, float pal, float age, float sc, float show, float grain, float dst,
+                           float z, uint fz, uint s)
+{
+    float k = sstep(0.0f, 0.35f, burnHeat(x, y, cover, sc, z, s));
+    uint zi = (uint)(z + 1000.0f);
+    float ang = 6.2831853f * ((float)(zi % 1000u) * 0.37f + 0.25f * hash01(zi, s, 71u));
+    float ca = _cosf(ang), sa = _sinf(ang), ext = 0.5f * (_fabs(ca) * aspect + _fabs(sa));
+    float band = 0.5f + 0.5f * ((x - 0.5f * aspect) * ca + (y - 0.5f) * sa) / ext;
+    float cl = fbm(x / (sc * 1.6f), y / (sc * 1.6f), z, 3, s + 200u);
+    float t = 0.05f + 0.95f * _saturatef(0.8f * band + 0.95f * (cl - 0.5f) + 0.15f);
+    float3 c = ramp(pal, t, age);
+    float keep = lerp1(1.0f, show, k);
+    float gr = 1.0f + grain * 0.22f * (hash01((uint)(px), (uint)(py), fz * 3u + s) - 0.5f) * k;
+    float d = dust(px, py, ph, dst * 100.0f, fz + s) * k;
+    float rr = (r * keep + c.x * k) * gr, gg = (g * keep + c.y * k) * gr, bb = (b * keep + c.z * k) * gr;
+    if (d < 0.0f) { rr *= 0.15f; gg *= 0.12f; bb *= 0.12f; }
+    if (d > 0.0f) { rr = rr + 0.6f; gg = gg + 0.55f; bb = bb + 0.45f; }
+    return make_float4(rr, gg, bb, k);
+}
+
+__DEVICE__ float3 gelColour(float gel, float h, float s)
+{
+    float w = _fmaxf(gel, 0.0f) / 100.0f, c = _fmaxf(-gel, 0.0f) / 100.0f;
+    float r = toLin(1.0f - 0.42f * c), g = toLin(1.0f - 0.20f * w - 0.16f * c), b = toLin(1.0f - 0.55f * w);
+    float k = _fmod(h / 60.0f + 600.0f, 6.0f);
+    float hr = toLin(_saturatef(_fabs(k - 3.0f) - 1.0f)), hg = toLin(_saturatef(2.0f - _fabs(k - 2.0f))), hb = toLin(_saturatef(2.0f - _fabs(k - 4.0f)));
+    r = lerp1(r, hr, s); g = lerp1(g, hg, s); b = lerp1(b, hb, s);
+    float m = _fmaxf(_fmaxf(r, g), _fmaxf(b, 1e-4f));
+    r /= m; g /= m; b /= m;
+    float up = _fminf(lerp1(1.0f, 1.0f / _fmaxf(luma(r, g, b), 0.02f), 0.5f), 3.0f);
+    return make_float3(r * up, g * up, b * up);
+}
+
+__DEVICE__ float2 poolAt(float x, float y, float cx, float cy, float R, float a, float ang, float pen)
+{
+    float px = x - cx, py = y - cy, ca = _cosf(ang), sa = _sinf(ang), sq = _sqrtf(a);
+    float qx = (px * ca + py * sa) / (R * sq), qy = (-px * sa + py * ca) * sq / R;
+    float r = _sqrtf(qx * qx + qy * qy);
+    return make_float2(1.0f - sstep(1.0f - pen, 1.0f + pen, r), r);
+}
+
+__DEVICE__ float ringLuma(__TEXTURE2D__ tr, __TEXTURE2D__ tg, __TEXTURE2D__ tb, int x, int y, float r, int w, int h)
+{
+    float s = 0.0f;
+    for (int k = 0; k < 8; k++) {
+        float a = 0.7853982f * (float)(k) + 0.39f;
+        int px = (int)(_fminf(_fmaxf((float)(x) + r * _cosf(a), 0.0f), (float)(w - 1)));
+        int py = (int)(_fminf(_fmaxf((float)(y) + r * _sinf(a), 0.0f), (float)(h - 1)));
+        s += luma(_saturatef(dvTex2D(tr, px, py)), _saturatef(dvTex2D(tg, px, py)), _saturatef(dvTex2D(tb, px, py)));
+    }
+    return s / 8.0f;
+}
+
+__DEVICE__ float3 dvMain(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE2D__ p_TexR, __TEXTURE2D__ p_TexG, __TEXTURE2D__ p_TexB, int dvFrame, float dvProgress, float slAmount, float slMode, float slX, float slY, float slSize, float slAspect, float slAngle, float slSoft, float slLight, float slAmb, float slGel, float slSat, float slHue, float slSpread, float slBeams, float slRigY, float slRig, float slFan, float slHaze, float slDepth, float slLand, float slSweep, float slSpeed, float slSeed)
+{
+    float3 c0 = make_float3(dvTex2D(p_TexR, p_X, p_Y), dvTex2D(p_TexG, p_X, p_Y), dvTex2D(p_TexB, p_X, p_Y));
+    if (slAmount <= 0.0f) return c0;
+    int m = (int)(slMode + 0.5f);
+    float hh = (float)(p_Height), aspect = (float)(p_Width) / hh;
+    float x = ((float)(p_X) + 0.5f) / hh, y = ((float)(p_Y) + 0.5f) / hh;
+    float lr = toLin(_saturatef(c0.x)), lg = toLin(_saturatef(c0.y)), lb = toLin(_saturatef(c0.z));
+    float soft = slSoft / 100.0f, gain = _exp2f(slLight), amb = _exp2f(slAmb);
+    float t = (float)(dvFrame) / 24.0f;
+    uint sd = (uint)(slSeed) * 613u + 5u;
+    float3 o;
+    if (m <= 1) {
+        float R = 0.06f + 0.0065f * slSize;
+        float a = _exp2f((slAspect - 50.0f) / 25.0f);
+        float pen = _fmaxf(0.03f + 0.75f * soft * soft + 0.15f * soft, 2.0f / (hh * R));
+        float2 pl = poolAt(x, y, slX / 100.0f * aspect, slY / 100.0f, R, a, slAngle * 0.0174533f, pen);
+        float lit = m == 0 ? pl.x : 1.0f - pl.x;
+        float field = m == 0 ? 0.9f + 0.2f * _expf(-2.5f * pl.y * pl.y) : 1.0f;
+        float3 gc = gelColour(slGel, slHue, slSat / 100.0f);
+        float gn = gain * field;
+        float fr = lerp1(amb, gn * gc.x, lit), fg = lerp1(amb, gn * gc.y, lit), fb = lerp1(amb, gn * gc.z, lit);
+        o = lightOut(lr * fr, lg * fg, lb * fb, _saturatef((gn - 1.0f) * lit * 2.0f));
+    } else {
+        int n = (int)(slBeams + 0.5f);
+        float mid = 0.5f * (float)(n - 1);
+        float sy = slRigY / 100.0f, land = slLand / 100.0f;
+        float dvHalf = (1.5f + 0.16f * slSize) * 0.0174533f, th = _sinf(dvHalf) / _cosf(dvHalf);
+        float rigHalf = 0.5f * slRig / 100.0f * aspect;
+        float smoke = fbm(x * 3.2f - t * 0.06f, y * 3.2f + t * 0.02f, t * 0.12f, 4, sd + 3u);
+        float front = 0.0f;
+        if (slDepth > 0.0f) {
+            float Ld = luma(_saturatef(c0.x), _saturatef(c0.y), _saturatef(c0.z));
+            float Lr = 0.5f * (ringLuma(p_TexR, p_TexG, p_TexB, p_X, p_Y, 0.037f * hh, p_Width, p_Height) + ringLuma(p_TexR, p_TexG, p_TexB, p_X, p_Y, 0.083f * hh, p_Width, p_Height));
+            front = slDepth / 100.0f * sstep(0.15f, 0.55f, (Lr - Ld) / (Lr + 0.04f));
+        }
+        float gp = gain * 1.41f;
+        float addr = 0.0f, addg = 0.0f, addb = 0.0f, litr = 0.0f, litg = 0.0f, litb = 0.0f, lsum = 0.0f;
+        float pen = 0.10f + 0.6f * soft;
+        float hz = slHaze / 100.0f;
+        for (int i = 0; i < 6; i++) {
+            if (i >= n) break;
+            float fi = (float)(i) - mid;
+            float sx = slX / 100.0f * aspect + (n > 1 ? fi / mid * rigHalf : 0.0f);
+            float ph = 6.2831853f * hash01(sd, (uint)(i), 17u);
+            float sw = slSweep * _sinf(6.2831853f * slSpeed / 100.0f * 0.5f * t + ph) * ((i & 1) == 0 ? 1.0f : -1.0f);
+            float an = (slAngle + fi * slFan + sw) * 0.0174533f;
+            float dx = _sinf(an), dy = _cosf(an);
+            float vx = x - sx, vy = y - sy;
+            float al = vx * dx + vy * dy, pr = vx * dy - vy * dx;
+            float3 gc = gelColour(slGel, slHue + fi * slSpread, slSat / 100.0f);
+            float ds = _sqrtf(vx * vx + vy * vy);
+            float sg = 0.9f * _expf(-ds / 0.012f) + 0.10f * _expf(-ds / 0.06f);
+            addr += sg * gc.x * hz; addg += sg * gc.y * hz; addb += sg * gc.z * hz;
+            if (al <= 0.0f) continue;
+            float rad = 0.010f + al * th;
+            float u = _fabs(pr) / rad;
+            float Lh = dy > 0.05f ? (land - sy) / dy : 1e3f;
+            float end = Lh < 1e2f ? 1.0f - sstep(land - 0.10f, land + 0.5f * 0.42f * (0.010f + Lh * th), y) : 1.0f;
+            float edge = 1.0f - sstep(1.0f - pen, 1.0f + 0.5f * pen, u);
+            float chord = _sqrtf(_saturatef(1.0f - 0.85f * u * u));
+            float fall = 0.12f / (0.12f + al) * _sqrtf(0.10f / (0.10f + th));
+            float st = fbm(al * 1.6f + 9.0f * (float)(i), pr / rad * 2.2f, t * 0.15f, 3, sd + 40u + (uint)(i));
+            float dens = 0.06f + 2.0f * sstep(0.34f, 0.70f, 0.55f * smoke + 0.45f * st);
+            float bm = hz * 0.55f * edge * (0.35f + 0.65f * chord) * fall * end * dens * (1.0f - front);
+            addr += bm * gc.x; addg += bm * gc.y; addb += bm * gc.z;
+            float lit = 0.32f * edge * end, pool = 0.0f;
+            if (Lh < 1e2f) {
+                float cx = sx + dx * Lh, radL = 0.010f + Lh * th;
+                float rx = radL / _fmaxf(dy, 0.3f), ry = radL * 0.42f;
+                float qx = (x - cx) / rx, qy = (y - land) / ry, pq = _sqrtf(qx * qx + qy * qy);
+                float pp = _fmaxf(pen, 0.25f);
+                pool = 1.0f - sstep(1.0f - 1.8f * pp, 1.0f + 1.6f * pp, pq);
+            }
+            float lk = _fmaxf(lit, pool) * lerp1(gain, gp, pool / _fmaxf(_fmaxf(lit, pool), 1e-4f));
+            litr += lk * gc.x; litg += lk * gc.y; litb += lk * gc.z; lsum += _fmaxf(lit, pool);
+        }
+        float ka = amb * (1.0f - _fminf(lsum, 1.0f));
+        float r = lr * (ka + litr) + addr, g = lg * (ka + litg) + addg, b = lb * (ka + litb) + addb;
+        o = lightOut(r, g, b, _saturatef(4.0f * (addr + addg + addb) + (gp - 1.0f) * lsum * 2.0f));
+    }
+    float k = slAmount / 100.0f;
+    return make_float3(_saturatef(lerp1(c0.x, o.x, k)), _saturatef(lerp1(c0.y, o.y, k)), _saturatef(lerp1(c0.z, o.z, k)));
+}
+
+// fusegen: the kernel entry (Fusion's rows run bottom up; py is the DCTL's top-down row)
+__KERNEL__ void DevelopStageLightK4aec36d6(__CONSTANTREF__ DevelopStageLightP4aec36d6 *params, __TEXTURE2D__ p_TexR, __TEXTURE2D__ p_TexG, __TEXTURE2D__ p_TexB, __TEXTURE2D__ dvSrc, __TEXTURE2D_WRITE__ dvDst)
+{
+    DEFINE_KERNEL_ITERATORS_XY(x, y)
+    if (x < params->dvSize[0] && y < params->dvSize[1])
+    {
+        int py = params->dvFlipY != 0 ? params->dvSize[1] - 1 - y : y;
+        float3 c = dvMain(params->dvSize[0], params->dvSize[1], x, py, p_TexR, p_TexG, p_TexB, params->dvFrame, params->dvProgress, params->slAmount, params->slMode, params->slX, params->slY, params->slSize, params->slAspect, params->slAngle, params->slSoft, params->slLight, params->slAmb, params->slGel, params->slSat, params->slHue, params->slSpread, params->slBeams, params->slRigY, params->slRig, params->slFan, params->slHaze, params->slDepth, params->slLand, params->slSweep, params->slSpeed, params->slSeed);
+        float4 s = _tex2DVec4(dvSrc, x, y);
+        _tex2DVec4Write(dvDst, x, y, to_float4(c.x, c.y, c.z, s.w));
+    }
+}
+]]
+
+-- the plain source first; the compatibility source only if the plain one does not build
+DvSources = { DvMath .. DvMapping .. DvKernelText, DvCompat .. DvMath .. DvMapping .. DvKernelText }
+DvWorking = nil
+
+-- the last status of each tool, so a change is reported once
+DvLast = {}
+
+-- the compute node's error log (DVIPComputeNode:GetErrorLog, a name in fusionsystem.dll), or a note that it has none
+function DvNodeLog(node)
+	local log = nil
+	if node then
+		pcall(function()
+			log = node:GetErrorLog()
+		end)
+	end
+	if log == nil or log == "" then
+		return "(the node gave no error log; see the Fusion console)"
+	end
+	return tostring(log)
+end
+
+-- report a status: the console, the tool's data and the log file, each once per change
+function DvNote(tool, failed, msg)
+	local key = DvName
+	pcall(function()
+		key = tool.Name
+	end)
+	key = tostring(key)
+	local text = msg
+	if failed then
+		text = "FAILED: " .. msg
+	end
+	if DvLast[key] == text then
+		return
+	end
+	DvLast[key] = text
+	print(DvName .. " [" .. key .. "] " .. text)
+	pcall(function()
+		tool:SetData("DevelopFuse.Status", text)
+	end)
+	pcall(function()
+		local dir = os.getenv("TEMP") or os.getenv("TMP") or "."
+		local f = io.open(dir .. "/DevelopFuse.log", "a")
+		if f then
+			local line = (text:gsub("[\r\n]+", " | "))
+			f:write(os.date("%Y-%m-%d %H:%M:%S") .. "\t" .. key .. "\t" .. DvName .. "\t" .. line .. "\n")
+			f:close()
+		end
+	end)
+end
+
+-- a Lua error's message with its traceback when the debug library is there
+function DvTrace(e)
+	if debug and debug.traceback then
+		return debug.traceback(tostring(e), 2)
+	end
+	return tostring(e)
+end
+
+-- the visible error: a solid magenta frame the size of ref (nil when there is no picture to size it by)
+function DvFailImage(ref)
+	local bad = nil
+	if ref then
+		pcall(function()
+			bad = Image({IMG_Like = ref})
+			bad:Fill(Pixel({R = 1.0, G = 0.0, B = 1.0, A = 1.0}))
+		end)
+	end
+	return bad
+end
+
+function Create()
+	InSlAmount = self:AddInput("Stage Light", "slAmount", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 100.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InSlMode = self:AddInput("Mode", "slMode", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 0.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 2.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 2.0,
+		INPS_StatusText = "0 Spotlight, 1 Reverse Spotlight, 2 Stage Light",
+		})
+	InSlX = self:AddInput("Position X", "slX", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 50.0,
+		INP_MinScale = -50.0,
+		INP_MaxScale = 150.0,
+		INP_MinAllowed = -50.0,
+		INP_MaxAllowed = 150.0,
+		})
+	InSlY = self:AddInput("Position Y", "slY", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 55.0,
+		INP_MinScale = -50.0,
+		INP_MaxScale = 150.0,
+		INP_MinAllowed = -50.0,
+		INP_MaxAllowed = 150.0,
+		})
+	InSlSize = self:AddInput("Size", "slSize", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 40.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		INPS_StatusText = "Spotlight: the pool's size; Stage: each cone's width",
+		})
+	InSlAspect = self:AddInput("Aspect", "slAspect", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 60.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InSlAngle = self:AddInput("Angle", "slAngle", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 0.0,
+		INP_MinScale = -90.0,
+		INP_MaxScale = 90.0,
+		INP_MinAllowed = -90.0,
+		INP_MaxAllowed = 90.0,
+		INPS_StatusText = "Spotlight: the pool's turn; Stage: the rig's aim, 0 straight down",
+		})
+	InSlSoft = self:AddInput("Softness", "slSoft", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 25.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InSlLight = self:AddInput("Light", "slLight", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 0.7,
+		INP_MinScale = -2.0,
+		INP_MaxScale = 3.0,
+		INP_MinAllowed = -2.0,
+		INP_MaxAllowed = 3.0,
+		INPS_StatusText = "Stops: the lit part's exposure (Spotlight the pool, Reverse the rest, Stage where the beams land)",
+		})
+	InSlAmb = self:AddInput("Ambient", "slAmb", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = -2.0,
+		INP_MinScale = -6.0,
+		INP_MaxScale = 0.0,
+		INP_MinAllowed = -6.0,
+		INP_MaxAllowed = 0.0,
+		INPS_StatusText = "Stops: the unlit part's exposure",
+		})
+	InSlGel = self:AddInput("Gel", "slGel", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 15.0,
+		INP_MinScale = -100.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = -100.0,
+		INP_MaxAllowed = 100.0,
+		INPS_StatusText = "The lamp's colour: warm (amber) above 0, cold (blue) below",
+		})
+	InSlSat = self:AddInput("Colour", "slSat", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 0.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		INPS_StatusText = "A coloured gel of Hue mixed over Gel; Hue Spread fans the Stage beams round the wheel",
+		})
+	InSlHue = self:AddInput("Hue", "slHue", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 210.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 360.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 360.0,
+		})
+	InSlSpread = self:AddInput("Hue Spread", "slSpread", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 0.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 180.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 180.0,
+		})
+	InSlBeams = self:AddInput("Beams", "slBeams", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 3.0,
+		INP_MinScale = 1.0,
+		INP_MaxScale = 6.0,
+		INP_MinAllowed = 1.0,
+		INP_MaxAllowed = 6.0,
+		})
+	InSlRigY = self:AddInput("Rig Y", "slRigY", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = -6.0,
+		INP_MinScale = -50.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = -50.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InSlRig = self:AddInput("Rig Width", "slRig", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 50.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InSlFan = self:AddInput("Fan", "slFan", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 12.0,
+		INP_MinScale = -45.0,
+		INP_MaxScale = 45.0,
+		INP_MinAllowed = -45.0,
+		INP_MaxAllowed = 45.0,
+		})
+	InSlHaze = self:AddInput("Haze", "slHaze", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 50.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InSlDepth = self:AddInput("Depth", "slDepth", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 60.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		INPS_StatusText = "Stage: how far the beams pass behind dark silhouettes (trunks, branches)",
+		})
+	InSlLand = self:AddInput("Landing", "slLand", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 88.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 150.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 150.0,
+		INPS_StatusText = "Stage: where the beams meet the floor, percent of the frame's height",
+		})
+	InSlSweep = self:AddInput("Sweep", "slSweep", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 0.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 45.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 45.0,
+		})
+	InSlSpeed = self:AddInput("Speed", "slSpeed", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 20.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InSlSeed = self:AddInput("Seed", "slSeed", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 0.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InFrameOffset = self:AddInput("Frame Offset", "FrameOffset", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Integer = true,
+		INP_Default = 0,
+		INP_MinScale = 0,
+		INP_MaxScale = 1000,
+		INPS_StatusText = "Added to the comp frame to make the DCTL's frame value (Resolve's TIMELINE_FRAME_INDEX)",
+		})
+	InHoldFrame = self:AddInput("Hold Frame", "HoldFrame", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "CheckboxControl",
+		INP_Integer = true,
+		INP_Default = 0,
+		INPS_StatusText = "The frame value is Frame Offset alone, so a moving effect holds still",
+		})
+	InFlipY = self:AddInput("Rows Top Down", "FlipY", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "CheckboxControl",
+		INP_Integer = true,
+		INP_Default = 1,
+		IC_Visible = false,
+		})
+	InInput = self:AddInput("Input", "Input", {
+		LINKID_DataType = "Image",
+		LINK_Main = 1,
+		})
+	OutImage = self:AddOutput("Output", "Output", {
+		LINKID_DataType = "Image",
+		LINK_Main = 1,
+		})
+end
+
+-- one channel of img as its own texture, rows top-down (DvSplitSource); returns the plane, or nil and why
+function DvPlane(req, img, ch, flip)
+	local plane = Image({IMG_Like = img})
+	local node = DVIPComputeNode(req, DvSplitName, DvSplitSource, DvSplitParamsName, DvSplitParams)
+	if not node then
+		return nil, "the split kernel's compute node was not created (DVIPComputeNode gave nil)"
+	end
+	local p = node:GetParamBlock(DvSplitParams)
+	p.ch = ch
+	p.flipY = flip
+	p.size[0] = img.DataWindow:Width()
+	p.size[1] = img.DataWindow:Height()
+	node:SetParamBlock(p)
+	node:AddInput("src", img)
+	node:AddOutput("dst", plane)
+	if node:RunSession(req) then
+		return plane
+	end
+	return nil, "the split kernel did not run: " .. DvNodeLog(node)
+end
+
+-- the kernel over every pixel with source k; returns true when it ran, or false and why
+function DvRun(req, k, src, inc, planes, out, frame, flip, progress)
+	local node = DVIPComputeNode(req, DvKernelName, DvSources[k], DvParamsName, DvParams)
+	if not node then
+		return false, "source " .. k .. ": the compute node was not created (DVIPComputeNode gave nil)"
+	end
+	local p = node:GetParamBlock(DvParams)
+	p.slAmount = InSlAmount:GetValue(req).Value
+	p.slMode = InSlMode:GetValue(req).Value
+	p.slX = InSlX:GetValue(req).Value
+	p.slY = InSlY:GetValue(req).Value
+	p.slSize = InSlSize:GetValue(req).Value
+	p.slAspect = InSlAspect:GetValue(req).Value
+	p.slAngle = InSlAngle:GetValue(req).Value
+	p.slSoft = InSlSoft:GetValue(req).Value
+	p.slLight = InSlLight:GetValue(req).Value
+	p.slAmb = InSlAmb:GetValue(req).Value
+	p.slGel = InSlGel:GetValue(req).Value
+	p.slSat = InSlSat:GetValue(req).Value
+	p.slHue = InSlHue:GetValue(req).Value
+	p.slSpread = InSlSpread:GetValue(req).Value
+	p.slBeams = InSlBeams:GetValue(req).Value
+	p.slRigY = InSlRigY:GetValue(req).Value
+	p.slRig = InSlRig:GetValue(req).Value
+	p.slFan = InSlFan:GetValue(req).Value
+	p.slHaze = InSlHaze:GetValue(req).Value
+	p.slDepth = InSlDepth:GetValue(req).Value
+	p.slLand = InSlLand:GetValue(req).Value
+	p.slSweep = InSlSweep:GetValue(req).Value
+	p.slSpeed = InSlSpeed:GetValue(req).Value
+	p.slSeed = InSlSeed:GetValue(req).Value
+	p.dvProgress = progress
+	p.dvFrame = frame
+	p.dvFlipY = flip
+	p.dvSize[0] = src.DataWindow:Width()
+	p.dvSize[1] = src.DataWindow:Height()
+	node:SetParamBlock(p)
+	node:AddInput("p_TexR", planes.p_TexR)
+	node:AddInput("p_TexG", planes.p_TexG)
+	node:AddInput("p_TexB", planes.p_TexB)
+	node:AddInput("dvSrc", src)
+	node:AddOutput("dvDst", out)
+	if node:RunSession(req) then
+		return true
+	end
+	return false, "source " .. k .. ": RunSession failed: " .. DvNodeLog(node)
+end
+
+function DvProcess(req)
+	local src = InInput:GetValue(req)
+	if not src then
+		return nil, "no input image", true, nil
+	end
+	if req:IsPreCalc() then
+		return Image({IMG_Like = src, IMG_NoData = true}), nil, false, src
+	end
+	local inc = nil
+	local progress = 0.0
+	local out = Image({IMG_Like = src})
+	local flip = math.floor(InFlipY:GetValue(req).Value + 0.5)
+	local frame = math.floor(InFrameOffset:GetValue(req).Value + 0.5)
+	if InHoldFrame:GetValue(req).Value < 0.5 then
+		frame = frame + math.floor(req.Time + 0.5)
+	end
+	local planes = {}
+	local why = nil
+	planes.p_TexR, why = DvPlane(req, src, 0, flip)
+	if not planes.p_TexR then
+		return nil, "p_TexR: " .. tostring(why), true, src
+	end
+	planes.p_TexG, why = DvPlane(req, src, 1, flip)
+	if not planes.p_TexG then
+		return nil, "p_TexG: " .. tostring(why), true, src
+	end
+	planes.p_TexB, why = DvPlane(req, src, 2, flip)
+	if not planes.p_TexB then
+		return nil, "p_TexB: " .. tostring(why), true, src
+	end
+	local order = {}
+	if DvWorking then
+		order[1] = DvWorking
+	end
+	for k = 1, #DvSources do
+		if k ~= DvWorking then
+			order[#order + 1] = k
+		end
+	end
+	local errs = {}
+	for i = 1, #order do
+		local ok, err = DvRun(req, order[i], src, inc, planes, out, frame, flip, progress)
+		if ok then
+			DvWorking = order[i]
+			return out, "ok, the kernel runs from source " .. order[i], false, src
+		end
+		errs[#errs + 1] = tostring(err)
+	end
+	return nil, "the kernel ran from no source: " .. table.concat(errs, " || "), true, src
+end
+
+-- every failure is reported and shows as magenta; the input never passes through quietly
+function Process(req)
+	local res, msg, failed, ref = nil, nil, true, nil
+	local called, err = xpcall(function()
+		res, msg, failed, ref = DvProcess(req)
+	end, DvTrace)
+	if not called then
+		res, msg, failed = nil, "Lua error in Process: " .. tostring(err), true
+		if not ref then
+			pcall(function()
+				ref = InInput:GetValue(req)
+			end)
+		end
+	end
+	if msg then
+		DvNote(self, failed, msg)
+	end
+	if failed then
+		res = DvFailImage(ref)
+	end
+	OutImage:Set(req, res)
+end

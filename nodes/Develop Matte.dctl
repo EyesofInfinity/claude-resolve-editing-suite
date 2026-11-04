@@ -1,0 +1,37 @@
+// Develop Matte: letterbox bars for a wider aspect, last in the chain (after grain and dither), so the
+// bars stay a clean level while the picture keeps its own blacks. Each bar is (height - width / aspect) / 2 rows,
+// rounded to an even number for clean 4:2:0 chroma (138 rows at 2.39 on 1920 x 1080), with a hard edge. Matte
+// Offset moves the picture window up (positive) or down. The node measures the timeline frame (measured in Resolve
+// 21.1.1: on a 1920 x 1012 clip in a 1080 timeline the bars are those of the 1080 frame). With Matte Aspect at 0,
+// or at an aspect no wider than the frame, the input comes back untouched. MIT License.
+
+DEFINE_UI_PARAMS(matAspect, Matte Aspect, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 3.0, 0.01)
+DEFINE_UI_PARAMS(matOffset, Matte Offset, DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(matLevel,  Matte Level,  DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Matte Aspect, "0 is off; 2.39, 2.00 or 1.85 for the classic wide frames")
+DEFINE_UI_TOOLTIP(Matte Offset, "Moves the picture window up or down, as a share of the bar height")
+DEFINE_UI_TOOLTIP(Matte Level, "Brightness of the bars; 0 is true black")
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float r = _tex2D(p_TexR, p_X, p_Y), g = _tex2D(p_TexG, p_X, p_Y), b = _tex2D(p_TexB, p_X, p_Y);
+    if (matAspect <= 0.0f)
+    {
+        return make_float3(r, g, b);
+    }
+    float bar = ((float)(p_Height) - (float)(p_Width) / matAspect) * 0.5f;
+    int h = 2 * (int)(bar * 0.5f + 0.5f);
+    if (h <= 0)
+    {
+        return make_float3(r, g, b);
+    }
+    int off = 2 * (int)(matOffset / 100.0f * (float)(h) * 0.5f + (matOffset >= 0.0f ? 0.5f : -0.5f));
+    int top = h - off, bottom = p_Height - h - off;
+    if (p_Y < top || p_Y >= bottom)
+    {
+        float v = matLevel / 100.0f;
+        return make_float3(v, v, v);
+    }
+    return make_float3(r, g, b);
+}

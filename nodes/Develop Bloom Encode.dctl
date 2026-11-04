@@ -1,0 +1,29 @@
+// Develop Bloom, last node (after the Bloom Layer Mixer): the picture plus its bloom, linear times 1/8 in;
+// Rec.709 gamma 2.4 out. Bloom Rolloff 0 clips at white; above 0 the brightest channel rolls
+// toward white along a smooth shoulder (slope 1 where it starts, never reaching past white), with
+// the colour's ratios kept, so bright light keeps its detail and hue instead of flattening. MIT License.
+
+DEFINE_UI_PARAMS(bloomRoll, Bloom Rolloff, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Bloom Rolloff, "0 clips at white; higher starts a soft shoulder lower, so bright light keeps detail")
+
+__DEVICE__ float toDisp(float x) { return _powf(_fmaxf(x, 0.0f), 1.0f / 2.4f); }
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float r = _tex2D(p_TexR, p_X, p_Y) * 8.0f, g = _tex2D(p_TexG, p_X, p_Y) * 8.0f, b = _tex2D(p_TexB, p_X, p_Y) * 8.0f;
+    if (bloomRoll > 0.0f)
+    {
+        float kd = 1.0f - bloomRoll / 200.0f;
+        float K = _powf(kd, 2.4f);
+        float n = _fmaxf(r, _fmaxf(g, b));
+        if (n > K)
+        {
+            float x = n - K;
+            float m = K + x / (1.0f + x / (1.0f - K));
+            float f = m / n;
+            r *= f; g *= f; b *= f;
+        }
+    }
+    return make_float3(_saturatef(toDisp(r)), _saturatef(toDisp(g)), _saturatef(toDisp(b)));
+}

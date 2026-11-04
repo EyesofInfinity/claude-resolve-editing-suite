@@ -1,0 +1,80 @@
+// Develop Paint: paint strokes, watercolour, an edge-following tile mosaic and spray paint in one transform DCTL.
+// Five modes:
+//   0 Oil Paint: two layers of brush strokes laid along the picture's edges and the flow of its light, a broad layer
+//     first, then smaller strokes where the picture has detail; each stroke one colour taken under it, with bristle
+//     streaks, a dry end and impasto ridges lit from the top left; strokes stop short of a hard edge as a painter cuts in.
+//   1 Cartoon Paint: the same strokes in flat colour cut to few steps of light, saturated, inked on the picture's edges.
+//   2 Watercolour: the picture softened into washes laid in layers with wobbling borders, the darker wash pooling
+//     pigment at its edge, the picture's darkest small marks laid over, pigment settling into the paper's tooth,
+//     highlights left as bare paper.
+//   3 Tile Mosaic: square tiles laid square to the frame, turned to run along the picture's edges and cut where its
+//     colour changes, grout tracing the forms; each tile one colour from its own side of an edge, bevelled.
+//   4 Spray Paint: the picture airbrushed and pulled toward few stencil tones, then round droplets of three sizes, each
+//     carrying the paint from where it was aimed, so every border is oversprayed; a fine mist over all.
+// Size sets the stroke, wash, tile or overspray size. Detail: how far small strokes go into fine detail, how strongly
+// washes settle into steps, how hard tiles cut at edges, how many spray tones. Flow: how far strokes and tiles turn to
+// follow the picture's edges; where it is flat, strokes run at Angle with a slow wander, tiles square to the frame.
+// Texture: bristles and impasto, paper and granulation, grout and tile surface, mist. Boil repaints Oil, Cartoon and Spray a few times a second by
+// TIMELINE_FRAME_INDEX, as a painted animation boils; 0 holds them still. An OpenFX DCTL effect or a DCTL plugin node.
+// Amount mixes with the picture in display terms; Amount 0 is the input exactly. MIT License.
+
+DEFINE_UI_PARAMS(ptAmount,  Paint,   DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptMode,    Mode,    DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 4.0, 1.0)
+DEFINE_UI_PARAMS(ptSize,    Size,    DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptDetail,  Detail,  DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptAngle,   Angle,   DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 180.0, 1.0)
+DEFINE_UI_PARAMS(ptFlow,    Flow,    DCTLUI_SLIDER_FLOAT, 80.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptColour,  Colour,  DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptTexture, Texture, DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptBoil,    Boil,    DCTLUI_SLIDER_FLOAT, 25.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptSeed,    Seed,    DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Mode, "0 Oil Paint, 1 Cartoon Paint, 2 Watercolour, 3 Tile Mosaic, 4 Spray Paint")
+DEFINE_UI_TOOLTIP(Size, "Stroke, wash, tile or overspray size")
+DEFINE_UI_TOOLTIP(Detail, "Small strokes into detail; wash steps; how hard tiles cut at edges; spray tones")
+DEFINE_UI_TOOLTIP(Angle, "Oil and Cartoon: the strokes' run where the picture is flat")
+DEFINE_UI_TOOLTIP(Flow, "How far strokes and tiles turn to follow the picture's edges")
+DEFINE_UI_TOOLTIP(Boil, "Oil, Cartoon, Spray: how often the painting is redone; 0 holds it")
+
+#include "paint.h"
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (ptAmount <= 0.0f) return c0;
+    int m = (int)(ptMode + 0.5f);
+    float sc = (float)(H) / 1080.0f, fx = (float)(x), fy = (float)(y);
+    float an = ptAngle * 0.0174533f, det = ptDetail / 100.0f, col = ptColour / 100.0f, tex = ptTexture / 100.0f;
+    float flow = ptFlow / 100.0f;
+    int every = ptBoil <= 0.0f ? 0 : 2 + (int)((100.0f - ptBoil) / 100.0f * 12.0f);
+    int bf = every == 0 ? 0 : (int)(TIMELINE_FRAME_INDEX / every);
+    uint sd = (uint)(ptSeed) * 523u + 7u;
+    uint sb = sd + (uint)(bf % 4096) * 977u;
+    float3 o = c0;
+    if (m <= 1) {
+        float s1 = (5.0f + 0.22f * ptSize) * sc;
+        float s2 = 0.5f * s1;
+        float fl = m == 1 ? 1.0f : 0.0f;
+        float3 un = tent9(p_TexR, p_TexG, p_TexB, x, y, W, H, (int)(0.15f * s1 + 0.5f));
+        float gate = lerp1(0.15f, 0.02f, det);
+        float4 a = paintLayer(p_TexR, p_TexG, p_TexB, un, un, fx, fy, W, H, s1, 2, 1.0f, 0.0f, an, flow, col, tex, fl, sc, sb);
+        float4 b = paintLayer(p_TexR, p_TexG, p_TexB, make_float3(a.x, a.y, a.z), un, fx, fy, W, H, s2, 1, 0.9f, gate, an, flow, col, tex, fl, sc, sb + 5000u);
+        o = make_float3(b.x, b.y, b.z);
+        float cv = (fbm(fx / (1.4f * sc), fy / (1.4f * sc), 0.0f, 2, sd + 60u) - 0.5f) * 0.10f * tex * (1.0f - 0.7f * a.w);
+        o = make_float3(o.x * (1.0f + cv), o.y * (1.0f + cv), o.z * (1.0f + cv));
+        if (m == 1) {
+            float e = _fminf(edgeAt(p_TexR, p_TexG, p_TexB, x, y, W, H, (int)(1.5f * sc + 0.5f)), edgeAt(p_TexR, p_TexG, p_TexB, x, y, W, H, (int)(4.0f * sc + 0.5f)));
+            float ink = sstep(0.20f - 0.06f * det, 0.30f - 0.08f * det, e);
+            o = mix3(o, make_float3(0.05f, 0.04f, 0.06f), ink * 0.92f);
+        }
+    } else if (m == 2) {
+        o = watercolour(p_TexR, p_TexG, p_TexB, fx, fy, W, H, (3.0f + 0.12f * ptSize) * sc, det, col, tex, sc, sd);
+    } else if (m == 3) {
+        o = tileMosaic(p_TexR, p_TexG, p_TexB, x, y, W, H, (7.0f + 0.26f * ptSize) * sc, det, flow, tex, sc, sd);
+    } else {
+        o = sprayPaint(p_TexR, p_TexG, p_TexB, fx, fy, W, H, (2.0f + 0.12f * ptSize) * sc, det, col, tex, sc, sb);
+    }
+    float am = ptAmount / 100.0f;
+    return make_float3(_saturatef(lerp1(c0.x, o.x, am)), _saturatef(lerp1(c0.y, o.y, am)), _saturatef(lerp1(c0.z, o.z, am)));
+}

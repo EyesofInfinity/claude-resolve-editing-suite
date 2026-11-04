@@ -1,0 +1,38 @@
+<!doctype html>
+<!-- The smallest film HyperFrames renders: the setup's test, and the pattern for a page built around window.seek(seconds).
+     The root's data attributes and the paused timeline in window.__timelines are what the renderer needs. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Render test</title>
+<style>
+  body { margin: 0; background: #101114; }
+  #root { position: relative; width: 1280px; height: 720px; overflow: hidden; background: #101114; color: #f4f1ea; font: 700 72px sans-serif; }
+  #box { position: absolute; left: 0; top: 330px; width: 160px; height: 120px; background: #ff6a2b; }
+  #line { position: absolute; left: 60px; top: 150px; }
+</style>
+</head>
+<body>
+<div id="root" data-composition-id="root" data-start="0" data-duration="2" data-width="1280" data-height="720" data-fps="60" data-motion-blur="on">
+  <div id="line">Render test</div>
+  <div id="box"></div>
+</div>
+<script>
+  // the page draws itself at any time in seconds
+  window.seek = function (s) {
+    var p = Math.min(1, s / 2);
+    document.getElementById("box").style.transform = "translateX(" + (p * 1120) + "px)";
+  };
+  window.seek(0);
+</script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+<script>
+  // the adapter: a paused timeline that drives window.seek, registered under the composition's id
+  const clock = { t: 0 };
+  const tl = gsap.timeline({ paused: true });
+  tl.to(clock, { t: 2, duration: 2, ease: "none", modifiers: { t: (v) => { window.seek(parseFloat(v)); return v; } } }, 0);
+  window.__timelines = window.__timelines || {};
+  window.__timelines["root"] = tl;
+</script>
+</body>
+</html>

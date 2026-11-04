@@ -1,0 +1,50 @@
+// Develop Damage: film damage, grunge and burning edges in one transform DCTL. Six modes:
+//   0 Film Damage: a worn print running through a projector: long scratches that wander and break as the film runs,
+//     one-frame hairline scratches, dirt and lint specks dark and light, a hair, an emulsion blotch, density breathing.
+//   1 Grunge: a grime stamp: grime pooled in blotches and toward the edges, grit in clusters, a milky scuffed film.
+//   2 Stains: rings where spills dried, darkest in the tide line, mottled inside.
+//   3 Scratches: a scratched surface: fine scratches mostly one way catching the light, a few dark gouges, wear haze.
+//   4 Light Flicker: a light that will not hold steady, warming as it dims, uneven across the frame.
+//   5 Edge Burn: the edges of bright shapes (a title) roughened, then burned away by Burn with a glowing front.
+// Film Damage, Light Flicker and the burning front move by TIMELINE_FRAME_INDEX; Grunge, Stains and Scratches are
+// stamps that hold still (Seed gives another). An OpenFX DCTL effect or a DCTL plugin node. Amount mixes with the
+// picture in display terms; Amount 0 is the input exactly. MIT License.
+
+DEFINE_UI_PARAMS(dmAmount,   Damage,   DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dmMode,     Mode,     DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 5.0, 1.0)
+DEFINE_UI_PARAMS(dmStrength, Strength, DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dmSize,     Size,     DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dmSpeed,    Speed,    DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dmAge,      Age,      DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dmBurn,     Burn,     DCTLUI_SLIDER_FLOAT, 35.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dmKey,      Key,      DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dmSeed,     Seed,     DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Mode, "0 Film Damage, 1 Grunge, 2 Stains, 3 Scratches, 4 Light Flicker, 5 Edge Burn")
+DEFINE_UI_TOOLTIP(Speed, "How fast Film Damage and Light Flicker change")
+DEFINE_UI_TOOLTIP(Age, "A cleaner, cooler wear toward a dirtier, warmer one")
+DEFINE_UI_TOOLTIP(Burn, "Edge Burn: 0 roughens the edges, 100 has burned the shape away; keyframe it")
+DEFINE_UI_TOOLTIP(Key, "Edge Burn: the brightness a shape must pass to burn; best on a light title over a dark ground")
+
+#include "damage.h"
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (dmAmount <= 0.0f) return c0;
+    int m = (int)(dmMode + 0.5f), f = TIMELINE_FRAME_INDEX;
+    float sc = (float)(H) / 1080.0f;
+    float X = ((float)(x) + 0.5f) / sc, Y = ((float)(y) + 0.5f) / sc, Wn = (float)(W) / sc;
+    float str = dmStrength / 100.0f, size = 0.5f + dmSize / 100.0f, spd = dmSpeed / 100.0f, age = dmAge / 100.0f;
+    uint sd = (uint)(dmSeed) * 977u + 29u;
+    float3 l = lin3(c0), v = c0;
+    if (m == 0) v = disp3(filmDamage(l, X, Y, Wn, f, str, size, spd, age, sd));
+    else if (m == 1) v = grunge(l, X, Y, Wn, str, size, age, sd);
+    else if (m == 2) v = disp3(stains(l, X, Y, str, size, age, sd));
+    else if (m == 3) v = scratches(c0, X, Y, str, size, sd);
+    else if (m == 4) v = disp3(flicker(l, X, Y, f, str, spd, sd));
+    else v = disp3(edgeBurn(p_TexR, p_TexG, p_TexB, x, y, W, H, l, X, Y, f, str, size, dmBurn / 100.0f, dmKey / 100.0f, sd));
+    float a = dmAmount / 100.0f;
+    return sat3(mix3(c0, sat3(v), a));
+}

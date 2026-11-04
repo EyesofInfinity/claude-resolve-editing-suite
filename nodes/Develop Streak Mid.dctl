@@ -1,0 +1,24 @@
+// Develop Streak, pass 2 of 3: a dense Gaussian along the row (sigma 12 px at 1080 lines, every pixel read) of
+// Develop Streak Bright's light, so the long pass can sample it sparsely without leaving dots. The frame is black
+// outside: a pixel beyond the edge adds nothing and the weights still divide by the whole kernel, so a light by the
+// edge keeps only the part of its blur that lands inside the frame and no edge pixel is counted twice. Linear times
+// 1/8 in and out. MIT License.
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float sc = (float)(p_Height) / 1080.0f;
+    float sg = 12.0f * sc, iw = -0.5f / (sg * sg);
+    int kx = (int)(3.0f * sg) + 1;
+    float ar = 0.0f, ag = 0.0f, ab = 0.0f, aw = 0.0f;
+    for (int i = -kx; i <= kx; i++)
+    {
+        int x = p_X + i;
+        float w = _expf((float)(i * i) * iw);
+        aw += w;
+        if (x >= 0 && x <= p_Width - 1)
+        {
+            ar += w * _tex2D(p_TexR, x, p_Y); ag += w * _tex2D(p_TexG, x, p_Y); ab += w * _tex2D(p_TexB, x, p_Y);
+        }
+    }
+    return make_float3(ar / aw, ag / aw, ab / aw);
+}

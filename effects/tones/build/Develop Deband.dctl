@@ -1,0 +1,263 @@
+// Develop Deband: smooths the contour bands of an 8-bit gradient and dithers it so the delivered file holds the
+// gradient. A transform DCTL: lay it on a node after the grade.
+// Night skies, mist, fog and lifted indigo blacks arrive from 8-bit sources as runs of one code value with a step of
+// one code between them, and a grade that stretches the shadows makes each step larger. This finds the flat places
+// (the 3 x 3 neighbourhood within Threshold of the pixel), and there replaces the pixel with the mean of rings of
+// samples around it out to Radius. Each ring is four points in two opposite pairs, so a straight gradient averages back
+// to itself. A ring is dropped whole when a pair's mean lies past Threshold from the pixel (an edge or a line between
+// them) or a point lies past about two Thresholds (texture, or soft shading the reach would flatten), so the mean
+// never reaches across an edge or into texture. The rings turn and change radius per pixel and per frame, so the steps
+// dissolve into a smooth ramp with no pattern of their own. Then a fine dither (white noise less its neighbours' mean, a
+// blue-leaning grain, new each frame) of about one 8-bit code goes onto the flat places, so an 8-bit encode keeps a
+// gradient instead of re-cutting the bands. Pure black and pure white (bars, cards) take no dither.
+//   Amount: 0 returns the input exactly
+//   Threshold: the largest step, in 8-bit codes, that counts as a band (grades that stretch the shadows need more)
+//   Radius: how far the rings reach, in pixels at 1080 (wider bands need more)
+//   Dither: the grain's strength in 8-bit codes; Grain Size its cell: 1 is one pixel at any resolution, what it adds
+//   above 1 counts in pixels at 1080
+//   View: 0 the result, 1 the places it smooths (white is full smoothing)
+// Rec.709 gamma 2.4 display values in and out. MIT License.
+
+DEFINE_UI_PARAMS(dbAmount, Amount,      DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dbThresh, Threshold,   DCTLUI_SLIDER_FLOAT, 3.0, 0.5, 10.0, 0.1)
+DEFINE_UI_PARAMS(dbRadius, Radius,      DCTLUI_SLIDER_FLOAT, 64.0, 4.0, 128.0, 1.0)
+DEFINE_UI_PARAMS(dbDither, Dither,      DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 3.0, 0.1)
+DEFINE_UI_PARAMS(dbGrain,  Grain Size,  DCTLUI_SLIDER_FLOAT, 1.0, 1.0, 6.0, 0.1)
+DEFINE_UI_PARAMS(dbView,   View,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Amount, "0 returns the input exactly")
+DEFINE_UI_TOOLTIP(Threshold, "The largest step in 8-bit codes that counts as a band; raise it after a grade that stretches the shadows")
+DEFINE_UI_TOOLTIP(Radius, "How far the smoothing reaches, pixels at 1080")
+DEFINE_UI_TOOLTIP(Dither, "Grain strength in 8-bit codes, so an 8-bit encode keeps the gradient")
+DEFINE_UI_TOOLTIP(View, "0 the result, 1 the places it smooths")
+
+// Develop light: the shared code of Develop Leak, Develop Burn and Develop Light Dissolve.
+// build.py writes it into each effect, so every installed .dctl stands alone. Rec.709 gamma 2.4 in and out;
+// light is added in linear. Coordinates are in frame heights (y 0 to 1 top to bottom, x 0 to width/height),
+// so a leak keeps its shape at any resolution and aspect. MIT License.
+
+__DEVICE__ float toLin(float x) { return _powf(_fmaxf(x, 0.0f), 2.4f); }
+__DEVICE__ float toDisp(float x) { return _powf(_fmaxf(x, 0.0f), 1.0f / 2.4f); }
+__DEVICE__ float luma(float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; }
+__DEVICE__ float lerp1(float a, float b, float t) { return a + (b - a) * t; }
+__DEVICE__ float sstep(float a, float b, float x) { float t = _saturatef((x - a) / (b - a)); return t * t * (3.0f - 2.0f * t); }
+
+__DEVICE__ float3 shoulder(float r, float g, float b)
+{
+    float m = _fmaxf(r, _fmaxf(g, b));
+    if (m <= 0.8f) return make_float3(r, g, b);
+    float nm = 0.8f + 0.2f * _tanhf((m - 0.8f) / 0.2f);
+    float k = nm / m, w = 0.6f * sstep(1.0f, 3.0f, m);
+    return make_float3(lerp1(r * k, nm, w), lerp1(g * k, nm, w), lerp1(b * k, nm, w));
+}
+
+__DEVICE__ float3 lightOut(float r, float g, float b, float k)
+{
+    float3 s = shoulder(r, g, b);
+    float w = _saturatef(k * 4.0f);
+    return make_float3(_saturatef(toDisp(lerp1(r, s.x, w))), _saturatef(toDisp(lerp1(g, s.y, w))), _saturatef(toDisp(lerp1(b, s.z, w))));
+}
+
+__DEVICE__ float hash01(uint x, uint y, uint z)
+{
+    x = x * 1664525u + 1013904223u; y = y * 1664525u + 1013904223u; z = z * 1664525u + 1013904223u;
+    x += y * z; y += z * x; z += x * y;
+    x ^= x >> 16u; y ^= y >> 16u; z ^= z >> 16u;
+    x += y * z; y += z * x; z += x * y;
+    return (float)(x >> 8u) * (1.0f / 16777216.0f);
+}
+
+__DEVICE__ float fade(float t) { return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f); }
+
+__DEVICE__ float vnoise3(float x, float y, float z, uint s)
+{
+    int ix = (int)(x), iy = (int)(y), iz = (int)(z);
+    float tx = fade(x - (float)(ix)), ty = fade(y - (float)(iy)), tz = fade(z - (float)(iz));
+    uint x0 = (uint)(ix), y0 = (uint)(iy), z0 = (uint)(iz) + s * 7919u;
+    float a0 = lerp1(lerp1(hash01(x0, y0, z0), hash01(x0 + 1u, y0, z0), tx), lerp1(hash01(x0, y0 + 1u, z0), hash01(x0 + 1u, y0 + 1u, z0), tx), ty);
+    float a1 = lerp1(lerp1(hash01(x0, y0, z0 + 1u), hash01(x0 + 1u, y0, z0 + 1u), tx), lerp1(hash01(x0, y0 + 1u, z0 + 1u), hash01(x0 + 1u, y0 + 1u, z0 + 1u), tx), ty);
+    return lerp1(a0, a1, tz);
+}
+
+__DEVICE__ float fbm(float x, float y, float z, int n, uint s)
+{
+    float sum = 0.0f, amp = 0.5f, tot = 0.0f, f = 1.0f;
+    for (int i = 0; i < 5; i++) {
+        if (i >= n) break;
+        sum += amp * vnoise3(x * f + 4096.0f + 37.1f * (float)(i), y * f + 4096.0f + 11.7f * (float)(i), z * f + 4096.0f, s + (uint)(i));
+        tot += amp; amp *= 0.5f; f *= 2.03f;
+    }
+    float v = sum / tot;
+    return _saturatef((v - 0.5f) * 1.6f + 0.5f);
+}
+
+__DEVICE__ float3 ramp(float pal, float t, float age)
+{
+    int p = (int)(pal + 0.5f);
+    float c0r = 0.30f, c0g = 0.10f, c0b = 0.42f, c1r = 0.62f, c1g = 0.35f, c1b = 0.47f, c2r = 0.86f, c2g = 0.76f, c2b = 0.68f;
+    float h0r = 0.73f, h0g = 0.16f, h0b = 0.26f, h1r = 0.89f, h1g = 0.35f, h1b = 0.17f, h2r = 0.94f, h2g = 0.50f, h2b = 0.22f;
+    if (p == 1) {
+        c0r = 0.45f; c0g = 0.08f; c0b = 0.05f; c1r = 0.85f; c1g = 0.30f; c1b = 0.08f; c2r = 0.98f; c2g = 0.70f; c2b = 0.35f;
+        h0r = 0.80f; h0g = 0.20f; h0b = 0.04f; h1r = 0.98f; h1g = 0.55f; h1b = 0.12f; h2r = 1.00f; h2g = 0.85f; h2b = 0.55f;
+    }
+    if (p == 2) {
+        c0r = 0.18f; c0g = 0.10f; c0b = 0.45f; c1r = 0.65f; c1g = 0.25f; c1b = 0.65f; c2r = 0.95f; c2g = 0.70f; c2b = 0.75f;
+        h0r = 0.70f; h0g = 0.15f; h0b = 0.50f; h1r = 0.95f; h1g = 0.45f; h1b = 0.45f; h2r = 1.00f; h2g = 0.75f; h2b = 0.55f;
+    }
+    if (p == 3) {
+        c0r = 0.05f; c0g = 0.10f; c0b = 0.35f; c1r = 0.15f; c1g = 0.40f; c1b = 0.75f; c2r = 0.70f; c2g = 0.85f; c2b = 0.98f;
+        h0r = 0.10f; h0g = 0.25f; h0b = 0.60f; h1r = 0.35f; h1g = 0.65f; h1b = 0.95f; h2r = 0.85f; h2g = 0.95f; h2b = 1.00f;
+    }
+    float a = _saturatef(age);
+    float r0 = lerp1(c0r, h0r, a), g0 = lerp1(c0g, h0g, a), b0 = lerp1(c0b, h0b, a);
+    float r1 = lerp1(c1r, h1r, a), g1 = lerp1(c1g, h1g, a), b1 = lerp1(c1b, h1b, a);
+    float r2 = lerp1(c2r, h2r, a), g2 = lerp1(c2g, h2g, a), b2 = lerp1(c2b, h2b, a);
+    float u = _saturatef(t);
+    float r, g, b;
+    if (u < 0.5f) { float k = u * 2.0f; r = lerp1(r0, r1, k); g = lerp1(g0, g1, k); b = lerp1(b0, b1, k); }
+    else { float k = u * 2.0f - 1.0f; r = lerp1(r1, r2, k); g = lerp1(g1, g2, k); b = lerp1(b1, b2, k); }
+    float hot = sstep(1.0f, 1.4f, t);
+    return make_float3(toLin(lerp1(r, 1.0f, hot)), toLin(lerp1(g, 0.96f, hot)), toLin(lerp1(b, 0.90f, hot)));
+}
+
+__DEVICE__ float leakField(float x, float y, float aspect, float deg, float w, float sc, float z, uint s)
+{
+    float a = deg * 0.0174533f, ca = _cosf(a), sa = _sinf(a);
+    float ext = 0.5f * (_fabs(ca) * aspect + _fabs(sa));
+    float sproj = (x - 0.5f * aspect) * ca + (y - 0.5f) * sa;
+    float warp = fbm(x * 1.3f, y * 1.3f, z * 0.35f, 2, s + 40u) - 0.5f;
+    float d = _fmaxf(ext - sproj + 0.45f * warp * w * aspect, 0.0f);
+    float reach = _fmaxf(w * aspect, 0.02f);
+    float e = _expf(-(d / reach) * (d / reach));
+    float cloud = fbm(x / sc, y / sc, z, 3, s);
+    return _saturatef(e * (0.35f + 1.3f * cloud));
+}
+
+__DEVICE__ float burnHeat(float x, float y, float cover, float sc, float z, uint s)
+{
+    float wx = fbm(x / sc * 0.7f, y / sc * 0.7f, z * 0.6f, 2, s + 90u) - 0.5f;
+    float wy = fbm(x / sc * 0.7f + 31.0f, y / sc * 0.7f, z * 0.6f, 2, s + 91u) - 0.5f;
+    float h = fbm((x + 0.6f * wx) / sc, (y + 0.6f * wy) / sc, z, 4, s);
+    float th = 1.0f - cover;
+    return _saturatef((h - th + 0.28f) / 0.62f);
+}
+
+__DEVICE__ float dust(int px, int py, int h, float amount, uint z)
+{
+    float sc = (float)(h) / 1080.0f;
+    int cx = (int)((float)(px) / (2.5f * sc)), cy = (int)((float)(py) / (2.5f * sc));
+    float r = hash01((uint)(cx), (uint)(cy), z * 13u + 5u);
+    float lim = 0.00002f * amount;
+    if (r > lim) return 0.0f;
+    return hash01((uint)(cx), (uint)(cy), z * 13u + 6u) < 0.6f ? -1.0f : 1.0f;
+}
+
+__DEVICE__ float4 burnOver(float r, float g, float b, float x, float y, float aspect, int px, int py, int ph,
+                           float cover, float pal, float age, float sc, float show, float grain, float dst,
+                           float z, uint fz, uint s)
+{
+    float k = sstep(0.0f, 0.35f, burnHeat(x, y, cover, sc, z, s));
+    uint zi = (uint)(z + 1000.0f);
+    float ang = 6.2831853f * ((float)(zi % 1000u) * 0.37f + 0.25f * hash01(zi, s, 71u));
+    float ca = _cosf(ang), sa = _sinf(ang), ext = 0.5f * (_fabs(ca) * aspect + _fabs(sa));
+    float band = 0.5f + 0.5f * ((x - 0.5f * aspect) * ca + (y - 0.5f) * sa) / ext;
+    float cl = fbm(x / (sc * 1.6f), y / (sc * 1.6f), z, 3, s + 200u);
+    float t = 0.05f + 0.95f * _saturatef(0.8f * band + 0.95f * (cl - 0.5f) + 0.15f);
+    float3 c = ramp(pal, t, age);
+    float keep = lerp1(1.0f, show, k);
+    float gr = 1.0f + grain * 0.22f * (hash01((uint)(px), (uint)(py), fz * 3u + s) - 0.5f) * k;
+    float d = dust(px, py, ph, dst * 100.0f, fz + s) * k;
+    float rr = (r * keep + c.x * k) * gr, gg = (g * keep + c.y * k) * gr, bb = (b * keep + c.z * k) * gr;
+    if (d < 0.0f) { rr *= 0.15f; gg *= 0.12f; bb *= 0.12f; }
+    if (d > 0.0f) { rr = rr + 0.6f; gg = gg + 0.55f; bb = bb + 0.45f; }
+    return make_float4(rr, gg, bb, k);
+}
+
+__DEVICE__ float tapC(__TEXTURE__ t, int x, int y, int W, int H)
+{
+    int xx = x < 0 ? 0 : (x > W - 1 ? W - 1 : x);
+    int yy = y < 0 ? 0 : (y > H - 1 ? H - 1 : y);
+    return _tex2D(t, xx, yy);
+}
+
+__DEVICE__ float diffC(float r0, float g0, float b0, float r1, float g1, float b1)
+{
+    float dr = _fabs(_saturatef(r1) - _saturatef(r0)), dg = _fabs(_saturatef(g1) - _saturatef(g0)), db = _fabs(_saturatef(b1) - _saturatef(b0));
+    return _fmaxf(dr, _fmaxf(dg, db));
+}
+
+__DEVICE__ float cellN(float x, float y, float s, float z, uint seed)
+{
+    return vnoise3(x / s + 4096.0f, y / s + 4096.0f, z + 4096.0f, seed);
+}
+
+__DEVICE__ float blueN(float x, float y, float s, float z, uint seed)
+{
+    float c = cellN(x, y, s, z, seed);
+    float m = cellN(x - s, y, s, z, seed) + cellN(x + s, y, s, z, seed) + cellN(x, y - s, s, z, seed) + cellN(x, y + s, s, z, seed);
+    return (c - 0.25f * m) / 0.323f;
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float r = _tex2D(p_TexR, p_X, p_Y), g = _tex2D(p_TexG, p_X, p_Y), b = _tex2D(p_TexB, p_X, p_Y);
+    float amt = dbAmount / 100.0f;
+    if (amt <= 0.0f) return make_float3(r, g, b);
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float sc = (float)(H) / 1080.0f;
+    float T = dbThresh / 255.0f;
+    uint fi = (uint)(TIMELINE_FRAME_INDEX);
+
+    float dl = 0.0f;
+    for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
+            if (i == 0 && j == 0) continue;
+            float d = diffC(r, g, b, tapC(p_TexR, x + i, y + j, W, H), tapC(p_TexG, x + i, y + j, W, H), tapC(p_TexB, x + i, y + j, W, H));
+            dl = _fmaxf(dl, d);
+        }
+    }
+    float flat = 1.0f - sstep(T, 1.5f * T, dl);
+
+    float sr = 0.0f, sg = 0.0f, sb = 0.0f, sw = 0.0f;
+    if (flat > 0.0f) {
+        float rad0 = dbRadius * sc;
+        float th0 = 6.2831853f * hash01((uint)(x) + 4096u, (uint)(y) + 4096u, fi * 3u + 1u);
+        for (int k = 0; k < 8; k++) {
+            float hr = hash01((uint)(x) + 8192u, (uint)(y) + 4096u, fi * 3u + 2u + (uint)(k) * 7919u);
+            float rad = _fmaxf(rad0 * _sqrtf(((float)(k) + hr) / 8.0f), 1.0f);
+            float an = th0 + 2.3999632f * (float)(k);
+            int ox = (int)(_floorf(rad * _cosf(an) + 0.5f)), oy = (int)(_floorf(rad * _sinf(an) + 0.5f));
+            float r1 = tapC(p_TexR, x + ox, y + oy, W, H), g1 = tapC(p_TexG, x + ox, y + oy, W, H), b1 = tapC(p_TexB, x + ox, y + oy, W, H);
+            float r2 = tapC(p_TexR, x - ox, y - oy, W, H), g2 = tapC(p_TexG, x - ox, y - oy, W, H), b2 = tapC(p_TexB, x - ox, y - oy, W, H);
+            float r3 = tapC(p_TexR, x - oy, y + ox, W, H), g3 = tapC(p_TexG, x - oy, y + ox, W, H), b3 = tapC(p_TexB, x - oy, y + ox, W, H);
+            float r4 = tapC(p_TexR, x + oy, y - ox, W, H), g4 = tapC(p_TexG, x + oy, y - ox, W, H), b4 = tapC(p_TexB, x + oy, y - ox, W, H);
+            float d2 = _fmaxf(diffC(r, g, b, 0.5f * (r1 + r2), 0.5f * (g1 + g2), 0.5f * (b1 + b2)), diffC(r, g, b, 0.5f * (r3 + r4), 0.5f * (g3 + g4), 0.5f * (b3 + b4)));
+            float d1 = _fmaxf(_fmaxf(diffC(r, g, b, r1, g1, b1), diffC(r, g, b, r2, g2, b2)), _fmaxf(diffC(r, g, b, r3, g3, b3), diffC(r, g, b, r4, g4, b4)));
+            float w = (1.0f - sstep(0.5f * T, T, d2)) * (1.0f - sstep(1.5f * T, 2.5f * T, d1));
+            sr += w * (r1 + r2 + r3 + r4); sg += w * (g1 + g2 + g3 + g4); sb += w * (b1 + b2 + b3 + b4);
+            sw += w;
+        }
+    }
+    float er = (r + sr) / (1.0f + 4.0f * sw), eg = (g + sg) / (1.0f + 4.0f * sw), eb = (b + sb) / (1.0f + 4.0f * sw);
+    float kk = amt * flat;
+    float orr = r + (er - r) * kk, og = g + (eg - g) * kk, ob = b + (eb - b) * kk;
+    float shown = flat * sw / 8.0f;
+    if (dbView > 0.5f) return make_float3(shown, shown, shown);
+
+    float dz = dbDither / 255.0f * amt * flat * 0.5f;
+    if (dz > 0.0f) {
+        float gs = _fmaxf(1.0f + (dbGrain - 1.0f) * sc, 1.0f);
+        float fx = (float)(x), fy = (float)(y), z = (float)(fi);
+        float n0 = blueN(fx, fy, gs, z, 11u);
+        float nr = blueN(fx, fy, gs, z, 23u), ng = blueN(fx, fy, gs, z, 37u), nb = blueN(fx, fy, gs, z, 41u);
+        float hi = _fmaxf(_saturatef(orr), _fmaxf(_saturatef(og), _saturatef(ob)));
+        float lo = _fminf(_saturatef(orr), _fminf(_saturatef(og), _saturatef(ob)));
+        float keep = sstep(0.0f, 2.0f / 255.0f, hi) * sstep(0.0f, 2.0f / 255.0f, 1.0f - lo);
+        float q = dz * keep;
+        orr += q * (n0 + 0.33f * nr); og += q * (n0 + 0.33f * ng); ob += q * (n0 + 0.33f * nb);
+        orr = _fminf(_fmaxf(orr, _fminf(r, 0.0f)), _fmaxf(r, 1.0f));
+        og = _fminf(_fmaxf(og, _fminf(g, 0.0f)), _fmaxf(g, 1.0f));
+        ob = _fminf(_fmaxf(ob, _fminf(b, 0.0f)), _fmaxf(b, 1.0f));
+    }
+    return make_float3(orr, og, ob);
+}

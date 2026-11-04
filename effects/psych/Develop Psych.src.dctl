@@ -1,0 +1,144 @@
+// Develop Psych: psychedelic and colour-cycling looks in one transform DCTL. Nine modes:
+//   0 Blobs: drifting clouds of colour cycling through the spectrum, laid on the picture's own light (hard light),
+//     so its shapes stay readable through the colour.
+//   1 Stripes: bands of cycling colour along Angle, bent by slow noise, on the picture's light.
+//   2 Zebra: the picture's tones cut into Bands stripes that crawl down the tones; Colour 0 black and white,
+//     100 each stripe its own hue.
+//   3 Solarize: the darkroom flash: tones above Level fold back down, each channel at its own drifting level.
+//   4 Pseudo Colour: brightness mapped onto a rainbow Bands times over, cycling.
+//   5 Band Pass: only the middle of the picture's detail kept (a difference of two blurs at Scale), on grey.
+//   6 Prism: the picture split into its spectrum from the centre out, as through a prism lens.
+//   7 Dog Vision: two-colour sight (blue and yellow, red and green merged), a little soft.
+//   8 Colour Shadow: three echoes of the picture's light cast along Angle, each its own cycling hue, screened behind it.
+// Colour cycles with Speed by TIMELINE_FRAME_INDEX (Speed 0 holds still): an OpenFX DCTL effect or a DCTL plugin
+// node. Amount mixes with the picture in display terms; Amount 0 is the input exactly. MIT License.
+
+DEFINE_UI_PARAMS(psAmount, Psych,       DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(psMode,   Mode,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 8.0, 1.0)
+DEFINE_UI_PARAMS(psSpeed,  Speed,       DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(psScale,  Scale,       DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(psBands,  Bands,       DCTLUI_SLIDER_FLOAT, 4.0, 1.0, 16.0, 1.0)
+DEFINE_UI_PARAMS(psAngle,  Angle,       DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(psLevel,  Level,       DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(psColour, Colour,      DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(psSeed,   Seed,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Mode, "0 Blobs, 1 Stripes, 2 Zebra, 3 Solarize, 4 Pseudo Colour, 5 Band Pass, 6 Prism, 7 Dog Vision, 8 Colour Shadow")
+DEFINE_UI_TOOLTIP(Speed, "How fast the colour cycles; 0 holds it still")
+DEFINE_UI_TOOLTIP(Level, "Solarize: where tones fold back. Band Pass: its gain. Prism: how far the spectrum spreads")
+DEFINE_UI_TOOLTIP(Colour, "Zebra: 0 black and white, 100 a hue per stripe. Others: the colour's strength")
+
+#include "../light/light.h"
+#include "../glitch/glitch.h"
+
+__DEVICE__ float3 mix3c(float3 a, float3 b, float t) { return make_float3(lerp1(a.x, b.x, t), lerp1(a.y, b.y, t), lerp1(a.z, b.z, t)); }
+__DEVICE__ float3 sat3c(float3 c) { return make_float3(_saturatef(c.x), _saturatef(c.y), _saturatef(c.z)); }
+
+__DEVICE__ float3 pal(float t)
+{
+    float a = 6.2831853f * t;
+    return make_float3(0.5f + 0.5f * _cosf(a), 0.5f + 0.5f * _cosf(a - 2.0943951f), 0.5f + 0.5f * _cosf(a - 4.1887902f));
+}
+
+__DEVICE__ float hl1(float L, float c) { return L < 0.5f ? 2.0f * L * c : 1.0f - 2.0f * (1.0f - L) * (1.0f - c); }
+__DEVICE__ float3 hardLight(float L, float3 c) { return make_float3(hl1(L, c.x), hl1(L, c.y), hl1(L, c.z)); }
+
+__DEVICE__ float fract1(float v) { return v - _floorf(v); }
+
+__DEVICE__ float3 discBlur(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int x, int y, int w, int h, float r)
+{
+    float3 s = make_float3(0.0f, 0.0f, 0.0f);
+    for (int i = 0; i < 16; i++) {
+        float rr = r * _sqrtf(((float)(i) + 0.5f) / 16.0f), an = 2.3999632f * (float)(i);
+        float3 c = rgbAt(tr, tg, tb, x + (int)(_round(rr * _cosf(an))), y + (int)(_round(rr * _sinf(an))), w, h);
+        s = make_float3(s.x + c.x, s.y + c.y, s.z + c.z);
+    }
+    return make_float3(s.x / 16.0f, s.y / 16.0f, s.z / 16.0f);
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (psAmount <= 0.0f) return c0;
+    int m = (int)(psMode + 0.5f);
+    float sc = (float)(H) / 1080.0f;
+    float tm = (float)(TIMELINE_FRAME_INDEX) / 24.0f * psSpeed / 100.0f * 0.4f;
+    uint sd = (uint)(psSeed) * 389u + 3u;
+    float L = luma(c0.x, c0.y, c0.z);
+    float u = ((float)(x) + 0.5f) / (float)(H), v = ((float)(y) + 0.5f) / (float)(H);
+    float an = psAngle * 0.0174533f, ca = _cosf(an), sa = _sinf(an);
+    float col = psColour / 100.0f, bands = _floorf(psBands + 0.5f);
+    float3 o = c0;
+    if (m == 0) {
+        float s = 0.12f + 0.9f * psScale / 100.0f;
+        float n = fbm(u / s, v / s, tm * 0.6f, 3, sd);
+        float3 p = pal(n * bands * 0.25f + tm);
+        o = mix3c(c0, hardLight(L, p), col);
+    } else if (m == 1) {
+        float s = 0.03f + 0.5f * psScale / 100.0f;
+        float w = fbm(u * 1.5f, v * 1.5f, tm * 0.3f, 2, sd) - 0.5f;
+        float3 p = pal((u * ca + v * sa) / s + 0.2f * w * bands + tm * 2.0f);
+        o = mix3c(c0, hardLight(L, p), col);
+    } else if (m == 2) {
+        float zv = L * bands - tm * 2.0f;
+        float f = fract1(zv), soft = 0.03f;
+        float z = _saturatef(sstep(0.0f, soft, f) - sstep(0.5f, 0.5f + soft, f));
+        float3 hue = pal(_floorf(zv) / _fmaxf(bands, 1.0f) * 0.618f + tm);
+        o = mix3c(make_float3(z, z, z), make_float3(z * hue.x + (1.0f - z) * hue.x * 0.15f, z * hue.y + (1.0f - z) * hue.y * 0.15f, z * hue.z + (1.0f - z) * hue.z * 0.15f), col);
+    } else if (m == 3) {
+        float th = 0.2f + 0.6f * psLevel / 100.0f;
+        float tr = _saturatef(th + 0.15f * _sinf(6.2831853f * tm)), tg = _saturatef(th + 0.15f * _sinf(6.2831853f * tm + 2.0943951f));
+        float tb = _saturatef(th + 0.15f * _sinf(6.2831853f * tm + 4.1887902f));
+        float r = c0.x <= tr ? c0.x : tr * (1.0f - c0.x) / _fmaxf(1.0f - tr, 0.001f);
+        float g = c0.y <= tg ? c0.y : tg * (1.0f - c0.y) / _fmaxf(1.0f - tg, 0.001f);
+        float b = c0.z <= tb ? c0.z : tb * (1.0f - c0.z) / _fmaxf(1.0f - tb, 0.001f);
+        float3 so = make_float3(r / _fmaxf(tr, 0.001f), g / _fmaxf(tg, 0.001f), b / _fmaxf(tb, 0.001f));
+        float k = 0.35f + 0.65f * col;
+        o = make_float3(_saturatef(lerp1(r, so.x, k)), _saturatef(lerp1(g, so.y, k)), _saturatef(lerp1(b, so.z, k)));
+    } else if (m == 4) {
+        float3 p = pal(L * bands * 0.5f + tm);
+        o = mix3c(make_float3(L, L, L), p, col);
+    } else if (m == 5) {
+        float r1 = (1.0f + 10.0f * psScale / 100.0f) * sc;
+        float3 b1 = discBlur(p_TexR, p_TexG, p_TexB, x, y, W, H, r1), b2 = discBlur(p_TexR, p_TexG, p_TexB, x, y, W, H, r1 * 3.0f);
+        float gn = 2.0f + 14.0f * psLevel / 100.0f;
+        float3 d = make_float3(b1.x - b2.x, b1.y - b2.y, b1.z - b2.z);
+        float dl = luma(d.x, d.y, d.z);
+        float3 g3 = make_float3(0.5f + gn * dl, 0.5f + gn * dl, 0.5f + gn * dl);
+        o = sat3c(mix3c(g3, make_float3(0.5f + gn * d.x, 0.5f + gn * d.y, 0.5f + gn * d.z), col));
+    } else if (m == 6) {
+        float cx = 0.5f * (float)(W) - 0.5f, cy = 0.5f * (float)(H) - 0.5f, disp = 0.004f + 0.04f * psLevel / 100.0f;
+        float r = 0.0f, g = 0.0f, b = 0.0f, wr = 0.0f, wg = 0.0f, wb = 0.0f;
+        for (int i = 0; i < 12; i++) {
+            float t = ((float)(i) + 0.5f) / 12.0f;
+            float3 wq = pal(t * 0.75f);
+            float3 wt = make_float3(wq.x * wq.x * wq.x, wq.y * wq.y * wq.y, wq.z * wq.z * wq.z);
+            float k = 1.0f + disp * (t - 0.5f) * 2.0f;
+            int sx = (int)(_round(cx + ((float)(x) - cx) * k)), sy = (int)(_round(cy + ((float)(y) - cy) * k));
+            float3 c = rgbAt(p_TexR, p_TexG, p_TexB, sx, sy, W, H);
+            r += wt.x * toLin(c.x); g += wt.y * toLin(c.y); b += wt.z * toLin(c.z);
+            wr += wt.x; wg += wt.y; wb += wt.z;
+        }
+        float3 pr = make_float3(toDisp(r / wr), toDisp(g / wg), toDisp(b / wb));
+        o = mix3c(c0, pr, 0.5f + 0.5f * col);
+    } else if (m == 7) {
+        float3 c = discBlur(p_TexR, p_TexG, p_TexB, x, y, W, H, 2.5f * sc);
+        float lr = toLin(c.x), lg = toLin(c.y), lb = toLin(c.z);
+        float yl = 0.29275f * lr + 0.70725f * lg;
+        float bl = _fmaxf(-0.02234f * lr + 0.02234f * lg + lb, 0.0f);
+        o = make_float3(toDisp(yl), toDisp(yl), toDisp(bl));
+    } else {
+        float d = (0.008f + 0.05f * psScale / 100.0f) * (float)(H);
+        float er = 0.0f, eg = 0.0f, eb = 0.0f;
+        for (int k = 1; k <= 3; k++) {
+            float lk = lumaAt(p_TexR, p_TexG, p_TexB, x - (int)(_round(ca * d * (float)(k))), y - (int)(_round(sa * d * (float)(k))), W, H);
+            float3 p = pal(tm + (float)(k) / 3.0f);
+            float wgt = (1.0f - 0.22f * (float)(k)) * col * 1.15f;
+            er += p.x * lk * wgt; eg += p.y * lk * wgt; eb += p.z * lk * wgt;
+        }
+        o = make_float3(1.0f - (1.0f - c0.x) * (1.0f - _saturatef(er)), 1.0f - (1.0f - c0.y) * (1.0f - _saturatef(eg)), 1.0f - (1.0f - c0.z) * (1.0f - _saturatef(eb)));
+    }
+    float a = psAmount / 100.0f;
+    return sat3c(mix3c(c0, sat3c(o), a));
+}

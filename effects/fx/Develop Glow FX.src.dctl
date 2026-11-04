@@ -1,0 +1,90 @@
+// Develop Glow FX: six glows in one DCTL:
+//   0 Darks: a smoky shadow spreading out of the dark areas
+//   1 Edges: light from the picture's edges, the same for thin lines and large shapes
+//   2 Rainbow: light from bright areas whose colour runs through the spectrum with distance
+//   3 Rings: coloured rings standing off the bright areas
+//   4 Noise: a glow broken up by a slow drifting noise
+//   5 Orthicon: a dark halo around highlights, the old orthicon tube's look
+// One pass of 48 taps on a Vogel disc of Size; light is added in linear. Moves by TIMELINE_FRAME_INDEX (the noise
+// drifts): run it as an OpenFX DCTL effect or a DCTL plugin node. MIT License.
+
+DEFINE_UI_PARAMS(gfMode,   Mode,        DCTLUI_SLIDER_FLOAT, 2.0, 0.0, 5.0, 1.0)
+DEFINE_UI_PARAMS(gfAmount, Glow,        DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gfSize,   Size,        DCTLUI_SLIDER_FLOAT, 35.0, 1.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gfThresh, Threshold,   DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gfHue,    Tint Hue,    DCTLUI_SLIDER_FLOAT, 210.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(gfTint,   Tint,        DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Mode, "0 Darks, 1 Edges, 2 Rainbow, 3 Rings, 4 Noise, 5 Orthicon")
+
+#include "../light/light.h"
+#include "../glitch/glitch.h"
+
+__DEVICE__ float3 hueRGB(float h)
+{
+    float k = _fmod(h / 60.0f + 600.0f, 6.0f);
+    float r = _saturatef(_fabs(k - 3.0f) - 1.0f), g = _saturatef(2.0f - _fabs(k - 2.0f)), b = _saturatef(2.0f - _fabs(k - 4.0f));
+    return make_float3(toLin(r), toLin(g), toLin(b));
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (gfAmount <= 0.0f) return c0;
+    int mode = (int)(gfMode + 0.5f);
+    float amt = gfAmount / 100.0f, thr = gfThresh / 100.0f;
+    float R = (0.006f + 0.12f * gfSize / 100.0f) * (float)(H);
+    float3 tint = hueRGB(gfHue);
+    float tw = gfTint / 100.0f;
+    float ar = 0.0f, ag = 0.0f, ab = 0.0f, dark = 0.0f;
+    for (int i = 0; i < 48; i++) {
+        float fr = _sqrtf(((float)(i) + 0.5f) / 48.0f), a = (float)(i) * 2.3999632f;
+        int sx = x + (int)(R * fr * _cosf(a)), sy = y + (int)(R * fr * _sinf(a));
+        float3 s = rgbAt(p_TexR, p_TexG, p_TexB, sx, sy, W, H);
+        float Ls = luma(s.x, s.y, s.z);
+        float bp = _fmaxf(Ls - thr, 0.0f) / _fmaxf(1.0f - thr, 0.05f);
+        float lr = toLin(s.x), lg = toLin(s.y), lb = toLin(s.z);
+        float w = 1.0f - 0.6f * fr;
+        if (mode == 0) {
+            dark += (1.0f - sstep(0.0f, _fmaxf(thr, 0.05f), Ls)) * w;
+        } else if (mode == 1) {
+            float e = _fabs(lumaAt(p_TexR, p_TexG, p_TexB, sx + 1, sy, W, H) - lumaAt(p_TexR, p_TexG, p_TexB, sx - 1, sy, W, H))
+                    + _fabs(lumaAt(p_TexR, p_TexG, p_TexB, sx, sy + 1, W, H) - lumaAt(p_TexR, p_TexG, p_TexB, sx, sy - 1, W, H));
+            e = sstep(0.02f, 0.25f, e);
+            ar += e * lerp1(lr + 0.3f, tint.x, tw) * w; ag += e * lerp1(lg + 0.3f, tint.y, tw) * w; ab += e * lerp1(lb + 0.3f, tint.z, tw) * w;
+        } else if (mode == 2) {
+            float3 hc = hueRGB(gfHue + 300.0f * fr);
+            ar += bp * hc.x * w; ag += bp * hc.y * w; ab += bp * hc.z * w;
+        } else if (mode == 3) {
+            float ring = _expf(-((fr - 0.8f) / 0.1f) * ((fr - 0.8f) / 0.1f)) + 0.6f * _expf(-((fr - 0.45f) / 0.08f) * ((fr - 0.45f) / 0.08f));
+            float3 hc = hueRGB(gfHue + 120.0f * fr);
+            ar += bp * ring * lerp1(lr, hc.x, 0.6f + 0.4f * tw); ag += bp * ring * lerp1(lg, hc.y, 0.6f + 0.4f * tw); ab += bp * ring * lerp1(lb, hc.z, 0.6f + 0.4f * tw);
+        } else {
+            ar += bp * lerp1(lr, tint.x, tw) * w; ag += bp * lerp1(lg, tint.y, tw) * w; ab += bp * lerp1(lb, tint.z, tw) * w;
+        }
+    }
+    float r = toLin(c0.x), g = toLin(c0.y), b = toLin(c0.z), k = 0.0f;
+    if (mode == 0) {
+        float d = dark / 33.6f;
+        float m = 1.0f - 0.85f * amt * d * (1.0f - sstep(0.0f, 0.6f, luma(c0.x, c0.y, c0.z)) * 0.3f);
+        r *= m; g *= m; b *= m;
+        r += 0.03f * amt * d * tint.x * tw; g += 0.03f * amt * d * tint.y * tw; b += 0.03f * amt * d * tint.z * tw;
+        k = amt * d;
+    } else if (mode == 5) {
+        float halo = ar / 33.6f + ag / 33.6f + ab / 33.6f;
+        float self = sstep(thr, 1.0f, luma(c0.x, c0.y, c0.z));
+        float m = 1.0f - _saturatef(1.6f * amt * halo) * (1.0f - self);
+        r *= m; g *= m; b *= m;
+        k = 0.0f;
+    } else {
+        float gain = (mode == 1 ? 0.9f : 2.2f) * amt / 33.6f;
+        if (mode == 4) {
+            float n = fbm((float)(x) / (R * 0.7f + 1.0f), (float)(y) / (R * 0.7f + 1.0f), (float)(TIMELINE_FRAME_INDEX) * 0.04f, 3, 23u);
+            gain *= sstep(0.3f, 0.75f, n) * 1.8f;
+        }
+        r += ar * gain; g += ag * gain; b += ab * gain;
+        k = _saturatef((ar + ag + ab) * gain);
+    }
+    return lightOut(r, g, b, k);
+}

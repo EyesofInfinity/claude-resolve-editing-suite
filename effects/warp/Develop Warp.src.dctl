@@ -1,0 +1,186 @@
+// Develop Warp: blur and warp dissolves in one Transition DCTL. Six styles:
+//   0 Defocus: the outgoing shot racks soft, the two meet out of focus, the incoming racks sharp. A lens blur in
+//     linear light over 48 taps, the highlights weighted up (Glow) so they open into bokeh discs, as a lens does.
+//   1 Prism: the picture parts into its spectrum along Angle, the two shots cross in the split, it closes again.
+//   2 Melt: the outgoing shot drips down the frame column by column, smeared by its speed, a wet light on its edge,
+//     the incoming shot behind it.
+//   3 Smoke: rising smoke carries the incoming shot in; the smoke's edge glows.
+//   4 Vortex: the outgoing shot twists into a whirlpool round the centre and the incoming untwists out of it.
+//   5 Ripple: rings of water run out from the centre through both shots.
+// Every style starts exactly on the outgoing shot and ends exactly on the incoming one. Light is mixed and blurred in
+// linear (Rec.709 gamma 2.4); sampling is bilinear with mirrored edges. Lay them 16 to 36 frames. MIT License.
+
+DEFINE_UI_PARAMS(wpStyle,  Style,       DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 5.0, 1.0)
+DEFINE_UI_PARAMS(wpAmount, Amount,      DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(wpSize,   Size,        DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(wpAngle,  Angle,       DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(wpGlow,   Glow,        DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(wpSeed,   Seed,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Style, "0 Defocus, 1 Prism, 2 Melt, 3 Smoke, 4 Vortex, 5 Ripple")
+DEFINE_UI_TOOLTIP(Amount, "How far: the blur, the split, the twist, the waves")
+DEFINE_UI_TOOLTIP(Glow, "Defocus: how bright highlights open into bokeh. Smoke, Melt: the light on the edge")
+
+#include "../light/light.h"
+#include "../glitch/glitch.h"
+
+__DEVICE__ int mirW(int i, int n)
+{
+    int q = 2 * n, m = i % q;
+    if (m < 0) m += q;
+    if (m >= n) m = q - 1 - m;
+    return clampi(m, 0, n - 1);
+}
+
+__DEVICE__ float3 bilW(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, float fx, float fy, int w, int h)
+{
+    float bx = _floorf(fx), by = _floorf(fy);
+    float ax = fx - bx, ay = fy - by;
+    int x0 = (int)(bx), y0 = (int)(by);
+    int xa = mirW(x0, w), xb = mirW(x0 + 1, w), ya = mirW(y0, h), yb = mirW(y0 + 1, h);
+    float3 c00 = make_float3(_tex2D(tr, xa, ya), _tex2D(tg, xa, ya), _tex2D(tb, xa, ya));
+    if (ax == 0.0f && ay == 0.0f) return c00;
+    float3 c10 = make_float3(_tex2D(tr, xb, ya), _tex2D(tg, xb, ya), _tex2D(tb, xb, ya));
+    float3 c01 = make_float3(_tex2D(tr, xa, yb), _tex2D(tg, xa, yb), _tex2D(tb, xa, yb));
+    float3 c11 = make_float3(_tex2D(tr, xb, yb), _tex2D(tg, xb, yb), _tex2D(tb, xb, yb));
+    return make_float3(lerp1(lerp1(c00.x, c10.x, ax), lerp1(c01.x, c11.x, ax), ay),
+                       lerp1(lerp1(c00.y, c10.y, ax), lerp1(c01.y, c11.y, ax), ay),
+                       lerp1(lerp1(c00.z, c10.z, ax), lerp1(c01.z, c11.z, ax), ay));
+}
+
+__DEVICE__ float3 linAt(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, float fx, float fy, int w, int h)
+{
+    float3 c = bilW(tr, tg, tb, fx, fy, w, h);
+    return make_float3(toLin(c.x), toLin(c.y), toLin(c.z));
+}
+
+__DEVICE__ float3 lensBlur(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, float fx, float fy, float r, float bk, int w, int h)
+{
+    if (r < 0.5f) return linAt(tr, tg, tb, fx, fy, w, h);
+    float sr = 0.0f, sg = 0.0f, sb = 0.0f, sw = 0.0f;
+    for (int i = 0; i < 48; i++) {
+        float rr = r * _sqrtf(((float)(i) + 0.5f) / 48.0f), an = 2.3999632f * (float)(i);
+        float3 c = linAt(tr, tg, tb, fx + rr * _cosf(an), fy + rr * _sinf(an), w, h);
+        float wt = 1.0f + bk * _fmaxf(luma(c.x, c.y, c.z) - 0.25f, 0.0f);
+        sr += c.x * wt; sg += c.y * wt; sb += c.z * wt; sw += wt;
+    }
+    return make_float3(sr / sw, sg / sw, sb / sw);
+}
+
+__DEVICE__ float3 specW(float t)
+{
+    float a = 6.2831853f * t;
+    float r = 0.5f + 0.5f * _cosf(a), g = 0.5f + 0.5f * _cosf(a - 2.0943951f), b = 0.5f + 0.5f * _cosf(a - 4.1887902f);
+    return make_float3(r * r * r, g * g * g, b * b * b);
+}
+
+__DEVICE__ float4 transition(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_FromTexR, __TEXTURE__ p_FromTexG, __TEXTURE__ p_FromTexB, __TEXTURE__ p_FromTexA, __TEXTURE__ p_ToTexR, __TEXTURE__ p_ToTexG, __TEXTURE__ p_ToTexB, __TEXTURE__ p_ToTexA)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float p = _saturatef(TRANSITION_PROGRESS);
+    if (p <= 0.0f) { float3 a = rgbAt(p_FromTexR, p_FromTexG, p_FromTexB, x, y, W, H); return make_float4(a.x, a.y, a.z, 1.0f); }
+    if (p >= 1.0f) { float3 b = rgbAt(p_ToTexR, p_ToTexG, p_ToTexB, x, y, W, H); return make_float4(b.x, b.y, b.z, 1.0f); }
+    int st = (int)(wpStyle + 0.5f);
+    float sc = (float)(H) / 1080.0f, fx = (float)(x), fy = (float)(y);
+    float amt = wpAmount / 100.0f, size = wpSize / 100.0f, glow = wpGlow / 100.0f;
+    float an = wpAngle * 0.0174533f, dx = _cosf(an), dy = _sinf(an);
+    uint sd = (uint)(wpSeed) * 197u + 23u;
+    float bell = _sinf(3.1415927f * p);
+    float cx = 0.5f * (float)(W) - 0.5f, cy = 0.5f * (float)(H) - 0.5f;
+    float3 l = make_float3(0.0f, 0.0f, 0.0f);
+    float k = 0.0f;
+    if (st == 0) {
+        float r = (4.0f + 56.0f * amt) * sc * _powf(bell, 0.8f);
+        float mx = sstep(0.32f, 0.68f, p), bk = glow * 10.0f;
+        float3 a = mx < 1.0f ? lensBlur(p_FromTexR, p_FromTexG, p_FromTexB, fx, fy, r, bk, W, H) : make_float3(0.0f, 0.0f, 0.0f);
+        float3 b = mx > 0.0f ? lensBlur(p_ToTexR, p_ToTexG, p_ToTexB, fx, fy, r, bk, W, H) : make_float3(0.0f, 0.0f, 0.0f);
+        l = make_float3(lerp1(a.x, b.x, mx), lerp1(a.y, b.y, mx), lerp1(a.z, b.z, mx));
+        k = bell * glow * 0.5f;
+    } else if (st == 1) {
+        float D = amt * 0.10f * (float)(W) * _powf(bell, 1.2f);
+        float mx = sstep(0.35f, 0.65f, p);
+        float r = 0.0f, g = 0.0f, b = 0.0f, wr = 0.0f, wg = 0.0f, wb = 0.0f;
+        for (int i = 0; i < 12; i++) {
+            float t = ((float)(i) + 0.5f) / 12.0f;
+            float3 wt = specW(t * 0.75f);
+            float o = (t - 0.5f) * D;
+            float3 ca = mx < 1.0f ? linAt(p_FromTexR, p_FromTexG, p_FromTexB, fx + dx * o, fy + dy * o, W, H) : make_float3(0.0f, 0.0f, 0.0f);
+            float3 cb = mx > 0.0f ? linAt(p_ToTexR, p_ToTexG, p_ToTexB, fx + dx * o, fy + dy * o, W, H) : make_float3(0.0f, 0.0f, 0.0f);
+            r += wt.x * lerp1(ca.x, cb.x, mx); g += wt.y * lerp1(ca.y, cb.y, mx); b += wt.z * lerp1(ca.z, cb.z, mx);
+            wr += wt.x; wg += wt.y; wb += wt.z;
+        }
+        l = make_float3(r / wr, g / wg, b / wb);
+        k = bell * 0.3f;
+    } else if (st == 2) {
+        float D = 0.55f + 0.9f * _powf(fbm(fx / ((160.0f + 320.0f * size) * sc), 0.5f, 0.0f, 2, sd), 1.2f);
+        float e = p * p * 2.8f, o = e * D * (float)(H);
+        float sway = (fbm(fx / (200.0f * sc), fy / (200.0f * sc), p * 2.0f, 2, sd + 3u) - 0.5f) * 30.0f * sc * amt * p;
+        float sy = fy - o;
+        float3 b = linAt(p_ToTexR, p_ToTexG, p_ToTexB, fx, fy, W, H);
+        float edge = sy / (6.0f * sc);
+        float lip = _expf(-edge * edge) * glow * 0.15f * _saturatef(p * 6.0f);
+        if (sy < 0.0f) {
+            l = make_float3(b.x + lip, b.y + lip, b.z + lip * 1.05f);
+            k = lip;
+        } else {
+            float len = (2.0f * p * D * (float)(H) / 24.0f) * amt;
+            float ar = 0.0f, ag = 0.0f, ab = 0.0f;
+            int n = len < 0.5f ? 1 : 12;
+            for (int i = 0; i < 12; i++) {
+                if (i >= n) break;
+                float tt = n == 1 ? 0.0f : ((float)(i) + 0.5f) / 12.0f;
+                float3 c = linAt(p_FromTexR, p_FromTexG, p_FromTexB, fx + sway, sy - tt * len, W, H);
+                ar += c.x; ag += c.y; ab += c.z;
+            }
+            l = make_float3(ar / (float)(n), ag / (float)(n), ab / (float)(n));
+            float fade = sstep(0.0f, 2.5f * sc, sy);
+            l = make_float3(lerp1(b.x, l.x, fade) + lip, lerp1(b.y, l.y, fade) + lip, lerp1(b.z, l.z, fade) + lip * 1.05f);
+            k = lip;
+        }
+    } else if (st == 3) {
+        float u = fx / (float)(H), v = fy / (float)(H), s = 0.25f + 0.8f * size;
+        float w1 = fbm(u * 2.0f / s, v * 2.0f / s + p, p * 0.7f, 2, sd + 5u) - 0.5f;
+        float w2 = fbm(u * 2.0f / s + 5.0f, v * 2.0f / s + p, p * 0.7f, 2, sd + 6u) - 0.5f;
+        float n = fbm(u * 1.4f / s + 0.6f * w1, v * 1.4f / s + 0.6f * w2 + p * 1.2f, p * 0.8f, 4, sd);
+        n = _saturatef(n * 0.75f + 0.25f * v);
+        float th = 1.4f - 1.8f * p;
+        float m = sstep(th - 0.22f, th + 0.22f, n);
+        float band = 4.0f * m * (1.0f - m);
+        float br = band * 10.0f * sc;
+        float3 a = br > 0.5f ? lensBlur(p_FromTexR, p_FromTexG, p_FromTexB, fx, fy, br, 0.0f, W, H) : linAt(p_FromTexR, p_FromTexG, p_FromTexB, fx, fy, W, H);
+        float3 b = br > 0.5f ? lensBlur(p_ToTexR, p_ToTexG, p_ToTexB, fx, fy, br, 0.0f, W, H) : linAt(p_ToTexR, p_ToTexG, p_ToTexB, fx, fy, W, H);
+        float wisp = fbm(u * 9.0f / s + 0.8f * w1, v * 9.0f / s - p * 2.5f, p * 1.5f, 4, sd + 9u);
+        float sm = band * band * (0.04f + 0.22f * glow) * wisp * wisp * 2.0f;
+        float La = luma(a.x, a.y, a.z), Lb = luma(b.x, b.y, b.z), base = 0.25f + 0.6f * _fmaxf(La, Lb);
+        l = make_float3(lerp1(a.x, b.x, m) + sm * base, lerp1(a.y, b.y, m) + sm * base, lerp1(a.z, b.z, m) + sm * base * 1.04f);
+        k = sm;
+    } else if (st == 4) {
+        float R = (0.35f + 0.6f * size) * (float)(H);
+        float ddx = fx - cx, ddy = fy - cy, d = _sqrtf(ddx * ddx + ddy * ddy);
+        float fall = d < R ? (1.0f - d / R) * (1.0f - d / R) : 0.0f;
+        float tw = amt * 9.0f;
+        float twA = tw * _fminf(4.0f * p * p, 1.0f), twB = tw * _fminf(4.0f * (1.0f - p) * (1.0f - p), 1.0f);
+        float mx = sstep(0.42f, 0.58f, p);
+        float ca = _cosf(twA * fall), sa = _sinf(twA * fall), cb = _cosf(-twB * fall), sb = _sinf(-twB * fall);
+        float3 a = linAt(p_FromTexR, p_FromTexG, p_FromTexB, cx + ddx * ca - ddy * sa, cy + ddx * sa + ddy * ca, W, H);
+        float3 b = linAt(p_ToTexR, p_ToTexG, p_ToTexB, cx + ddx * cb - ddy * sb, cy + ddx * sb + ddy * cb, W, H);
+        l = make_float3(lerp1(a.x, b.x, mx), lerp1(a.y, b.y, mx), lerp1(a.z, b.z, mx));
+        k = 0.0f;
+    } else {
+        float ddx = fx - cx, ddy = fy - cy, d = _sqrtf(ddx * ddx + ddy * ddy) + 0.001f;
+        float lam = (60.0f + 180.0f * size) * sc;
+        float front = p * 1.3f * _sqrtf(cx * cx + cy * cy);
+        float env = _expf(-_fabs(d - front) / (0.45f * (float)(H))) * bell;
+        float wv = _sinf((d - front) / lam * 6.2831853f);
+        float off = wv * env * amt * 0.12f * lam;
+        float sx = fx + ddx / d * off, sy = fy + ddy / d * off;
+        float mx = sstep(0.38f, 0.62f, p);
+        float3 a = linAt(p_FromTexR, p_FromTexG, p_FromTexB, sx, sy, W, H), b = linAt(p_ToTexR, p_ToTexG, p_ToTexB, sx, sy, W, H);
+        float cr = _fmaxf(_cosf((d - front) / lam * 6.2831853f), 0.0f);
+        float crest = cr * cr * cr * env * glow * 0.5f;
+        l = make_float3(lerp1(a.x, b.x, mx) * (1.0f + crest), lerp1(a.y, b.y, mx) * (1.0f + crest), lerp1(a.z, b.z, mx) * (1.0f + crest));
+        k = crest * 0.2f;
+    }
+    float3 o = lightOut(l.x, l.y, l.z, k);
+    return make_float4(o.x, o.y, o.z, 1.0f);
+}

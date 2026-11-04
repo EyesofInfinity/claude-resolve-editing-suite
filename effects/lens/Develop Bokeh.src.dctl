@@ -1,0 +1,129 @@
+// Develop Bokeh: lens defocus and bokeh in one transform DCTL. Four modes, all a lens blur in linear light whose taps fill the aperture:
+//   0 Lens Defocus: the picture out of focus through an aperture of Blades (under 3 is round), Rotation and Round;
+//     highlights open into bright shaped discs (Highlights) with a brighter rim, and toward the frame's edges the
+//     discs are cut into cat's eyes (Cat's Eye), as a real lens vignettes them.
+//   1 Prism Defocus: the same with the colours focused apart (Fringe): red discs wider, blue narrower, so every
+//     highlight wears a coloured rim.
+//   2 Bokeh Lights: drifting out-of-focus lights over the picture, each the aperture's shape with a bright rim, coloured
+//     from the picture under it (Hue 0) or by Hue; the picture itself softened by Defocus.
+//   3 Split Field: a band of sharp focus at Focus, the blur growing either side of it, as a tilted or split lens gives.
+// Moves by TIMELINE_FRAME_INDEX in Bokeh Lights only. An OpenFX DCTL effect or a DCTL plugin node. Amount mixes with
+// the picture in display terms; Amount 0 is the input exactly. MIT License.
+
+DEFINE_UI_PARAMS(bkAmount,  Bokeh,       DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bkMode,    Mode,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 3.0, 1.0)
+DEFINE_UI_PARAMS(bkRadius,  Defocus,     DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bkBlades,  Blades,      DCTLUI_SLIDER_FLOAT, 6.0, 0.0, 9.0, 1.0)
+DEFINE_UI_PARAMS(bkRotate,  Rotation,    DCTLUI_SLIDER_FLOAT, 15.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(bkRound,   Round,       DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bkHigh,    Highlights,  DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bkCat,     Cat Eye,     DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bkFringe,  Fringe,      DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bkDensity, Density,     DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bkSize,    Size,        DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bkFocus,   Focus,       DCTLUI_SLIDER_FLOAT, 55.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bkBand,    Band,        DCTLUI_SLIDER_FLOAT, 20.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bkHue,     Hue,         DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bkSeed,    Seed,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Mode, "0 Lens Defocus, 1 Prism Defocus, 2 Bokeh Lights, 3 Split Field")
+DEFINE_UI_TOOLTIP(Blades, "The aperture's blades; under 3 is round")
+DEFINE_UI_TOOLTIP(Cat Eye, "How much the discs are cut toward the edges of the frame")
+DEFINE_UI_TOOLTIP(Focus, "Split Field: the height of the sharp band (100 the top)")
+
+#include "lens.h"
+
+__DEVICE__ float3 lensTaps(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, float fx, float fy, float r, float ex, float ey,
+                           float sr, float sg, float sb, int n, float blades, float rot, float rnd, float cat, float hk, int w, int h)
+{
+    if (r < 0.5f) return linL(tr, tg, tb, fx, fy, w, h);
+    float ar = 0.0f, ag = 0.0f, ab = 0.0f, wr = 0.0f, wg = 0.0f, wb = 0.0f;
+    float jr = 6.2831853f * rnd3((int)(fx), (int)(fy), 911u), jq = rnd3((int)(fx), (int)(fy), 912u);
+    for (int i = 0; i < 96; i++) {
+        if (i >= n) break;
+        float q = _sqrtf(((float)(i) + jq) / (float)(n)), an = 2.3999632f * (float)(i) + jr;
+        float ap = aperture(an, blades, rot, rnd);
+        float ox = q * ap * _cosf(an), oy = q * ap * _sinf(an);
+        float cx = ox + cat * ex, cy = oy + cat * ey;
+        if (cx * cx + cy * cy > 1.0f) continue;
+        float rim = 1.0f + 0.8f * q * q * q * q;
+        float3 c;
+        if (sr == sg && sg == sb) {
+            c = linL(tr, tg, tb, fx + ox * r * sg, fy + oy * r * sg, w, h);
+        } else {
+            float3 c1 = linL(tr, tg, tb, fx + ox * r * sr, fy + oy * r * sr, w, h);
+            float3 c2 = linL(tr, tg, tb, fx + ox * r * sg, fy + oy * r * sg, w, h);
+            float3 c3 = linL(tr, tg, tb, fx + ox * r * sb, fy + oy * r * sb, w, h);
+            c = make_float3(c1.x, c2.y, c3.z);
+        }
+        float wt1 = rim * (1.0f + hk * _fmaxf(c.x - 0.25f, 0.0f)), wt2 = rim * (1.0f + hk * _fmaxf(c.y - 0.25f, 0.0f)), wt3 = rim * (1.0f + hk * _fmaxf(c.z - 0.25f, 0.0f));
+        ar += c.x * wt1; ag += c.y * wt2; ab += c.z * wt3; wr += wt1; wg += wt2; wb += wt3;
+    }
+    if (wg <= 0.0f) return linL(tr, tg, tb, fx, fy, w, h);
+    return make_float3(ar / wr, ag / wg, ab / wb);
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (bkAmount <= 0.0f) return c0;
+    int m = (int)(bkMode + 0.5f);
+    float sc = (float)(H) / 1080.0f, fx = (float)(x), fy = (float)(y);
+    float cxf = 0.5f * (float)(W) - 0.5f, cyf = 0.5f * (float)(H) - 0.5f, hd = _sqrtf(cxf * cxf + cyf * cyf);
+    float ex = (fx - cxf) / hd, ey = (fy - cyf) / hd;
+    float R = (1.0f + 59.0f * bkRadius / 100.0f) * sc;
+    float apB = _floorf(bkBlades + 0.5f), apR = bkRotate * 0.0174533f, apN = bkRound / 100.0f;
+    float apC = bkCat / 100.0f * 0.7f, apH = bkHigh / 100.0f * 12.0f;
+    float3 l;
+    float k = 0.0f;
+    if (m == 0) {
+        l = lensTaps(p_TexR, p_TexG, p_TexB, fx, fy, R, ex, ey, 1.0f, 1.0f, 1.0f, 96, apB, apR, apN, apC, apH, W, H);
+    } else if (m == 1) {
+        float f = bkFringe / 100.0f * 0.35f;
+        l = lensTaps(p_TexR, p_TexG, p_TexB, fx, fy, R, ex, ey, 1.0f + f, 1.0f, 1.0f - f, 56, apB, apR, apN, apC, apH, W, H);
+    } else if (m == 2) {
+        l = lensTaps(p_TexR, p_TexG, p_TexB, fx, fy, R * 0.5f, ex, ey, 1.0f, 1.0f, 1.0f, 32, apB, apR, apN, apC, apH, W, H);
+        float t = (float)(TIMELINE_FRAME_INDEX) / 24.0f;
+        float blades = _floorf(bkBlades + 0.5f), rot = bkRotate * 0.0174533f, rnd = bkRound / 100.0f;
+        uint sd = (uint)(bkSeed) * 307u + 41u;
+        for (int layer = 0; layer < 2; layer++) {
+            float cs = (layer == 0 ? 220.0f : 130.0f) * sc * (0.5f + bkSize / 100.0f);
+            float rad = cs * (layer == 0 ? 0.34f : 0.22f);
+            float xx = fx + t * 8.0f * sc * (float)(layer + 1), yy = fy - t * 5.0f * sc;
+            int ix = (int)(_floorf(xx / cs)), iy = (int)(_floorf(yy / cs));
+            uint ls = sd + (uint)(layer) * 61u;
+            if (rnd3(ix, iy, ls) < 0.15f + 0.8f * bkDensity / 100.0f) {
+                float px = ((float)(ix) + 0.5f + 0.25f * _sinf(t * 0.3f + 6.28f * rnd3(ix, iy, ls + 1u))) * cs;
+                float py = ((float)(iy) + 0.5f + 0.25f * _cosf(t * 0.25f + 6.28f * rnd3(ix, iy, ls + 2u))) * cs;
+                float rr = rad * (0.6f + 0.5f * rnd3(ix, iy, ls + 3u));
+                float dxx = xx - px, dyy = yy - py, d = _sqrtf(dxx * dxx + dyy * dyy);
+                float ap = aperture(_atan2f(dyy, dxx), blades, rot, rnd);
+                float q = d / (rr * ap);
+                if (q < 1.15f) {
+                    float disc = 1.0f - sstep(0.94f, 1.02f, q);
+                    float body = disc * (0.45f + 0.55f * q * q * q * q) + 0.35f * _expf(-(q - 1.0f) * (q - 1.0f) / 0.002f);
+                    float3 cc;
+                    if (bkHue <= 0.0f) {
+                        float3 pc = rgbAt(p_TexR, p_TexG, p_TexB, (int)(px - t * 8.0f * sc * (float)(layer + 1)), (int)(py + t * 5.0f * sc), W, H);
+                        float pm = _fmaxf(pc.x, _fmaxf(pc.y, pc.z)) + 0.05f;
+                        cc = make_float3(toLin(pc.x / pm), toLin(pc.y / pm), toLin(pc.z / pm));
+                    } else {
+                        cc = specL(bkHue / 100.0f + 0.15f * rnd3(ix, iy, ls + 4u));
+                    }
+                    float I = body * (0.10f + 0.25f * rnd3(ix, iy, ls + 5u)) * (layer == 0 ? 0.7f : 1.0f) * (0.85f + 0.15f * _sinf(t * 1.1f + 6.28f * rnd3(ix, iy, ls + 6u)));
+                    l = make_float3(l.x + I * cc.x, l.y + I * cc.y, l.z + I * cc.z);
+                    k = _fmaxf(k, I);
+                }
+            }
+        }
+    } else {
+        float v = (fy + 0.5f) / (float)(H), fv = 1.0f - bkFocus / 100.0f, band = 0.02f + 0.3f * bkBand / 100.0f;
+        float d = _fabs(v - fv);
+        float r = R * sstep(band, band + 0.35f, d);
+        l = lensTaps(p_TexR, p_TexG, p_TexB, fx, fy, r, ex, ey, 1.0f, 1.0f, 1.0f, 96, apB, apR, apN, apC, apH, W, H);
+    }
+    float3 o = lightOut(l.x, l.y, l.z, k);
+    float a = bkAmount / 100.0f;
+    return make_float3(_saturatef(lerp1(c0.x, o.x, a)), _saturatef(lerp1(c0.y, o.y, a)), _saturatef(lerp1(c0.z, o.z, a)));
+}

@@ -1,0 +1,16 @@
+{
+ "schema": "develop.look/0",
+ "name": "Deep Landscape",
+ "values": {
+  "temp": 4, "tint": 1,
+  "contr": 36, "blacks": -14, "shadow": 2, "hilite": -55, "whites": -16, "recon": 60,
+  "density": 62, "vibr": 16, "satur": 0, "cContr": 42,
+  "shHue": 205, "shSat": 58, "hiHue": 40, "hiSat": 34, "gBal": -14,
+  "halAmt": 34, "glowAmt": 16, "sparkle": 0, "rolloff": 75, "texAmt": 14, "clarity": 14,
+  "bloomAmt": 20, "bloomThr": 84, "bloomKnee": 50, "bloomFall": 2, "bloomWarm": 60, "bloomSpr": 50, "bloomSpark": 40, "bloomVeil": 0, "bloomRoll": 0,
+  "prAmt": 70, "prContr": 16, "prCross": 24,
+  "lvOptical": 40, "filmGrain": 20,
+  "lBlu": -34, "sBlu": 30, "lAqu": -20, "sAqu": 22, "sOra": 22, "lOra": 6
+ },
+ "per_shot": {}
+}

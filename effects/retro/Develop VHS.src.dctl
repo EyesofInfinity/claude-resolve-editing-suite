@@ -1,0 +1,60 @@
+// Develop VHS: a worn tape played back. Each line wobbles
+// sideways a little; a tracking band rolls up the frame tearing the lines it passes; the bottom rows smear where the
+// heads switch; colour bleeds and lags to the right of the brightness; the picture softens, its blacks lift and its
+// colour thins; sparse dropouts streak white; grain and the Bayer dither finish it. Moves by TIMELINE_FRAME_INDEX: run it as an OpenFX DCTL effect or a DCTL plugin node. MIT License.
+
+DEFINE_UI_PARAMS(vhAmount,  VHS,            DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(vhTrack,   Tracking,       DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(vhJitter,  Line Jitter,    DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(vhBleed,   Colour Bleed,   DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(vhNoise,   Tape Noise,     DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(vhDrop,    Dropouts,       DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(vhDither,  Dither,         DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(vhSeed,    Seed,           DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Tracking, "The rolling band of torn lines; 0 is a clean tracking")
+DEFINE_UI_TOOLTIP(Dither, "The picture crushed to few levels through a Bayer dither; 100 is 3 levels a channel")
+
+#include "../light/light.h"
+#include "../glitch/glitch.h"
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (vhAmount <= 0.0f) return c0;
+    float amt = vhAmount / 100.0f, sc = (float)(H) / 1080.0f;
+    int f = TIMELINE_FRAME_INDEX;
+    uint sd = (uint)(vhSeed) * 911u + 13u;
+    uint fz = (uint)(f) * 31u + sd;
+    float yb = (1.15f - _fmod((float)(f) / 72.0f + vhSeed * 0.37f, 1.0f) * 1.3f) * (float)(H);
+    float bh = 0.06f * (float)(H);
+    float inBand = _expf(-((float)(y) - yb) * ((float)(y) - yb) / (bh * bh)) * vhTrack / 100.0f;
+    float jit = (rnd3(y, f, sd + 1u) - 0.5f) * 2.0f * (1.5f + 3.0f * vhJitter / 100.0f) * sc;
+    jit += (fbm((float)(y) / (40.0f * sc), (float)(f) * 0.15f, 0.0f, 2, sd + 2u) - 0.5f) * 10.0f * sc * vhJitter / 100.0f;
+    jit += inBand * (rnd3(y, f, sd + 3u) - 0.5f) * 80.0f * sc;
+    float hs = (float)(y) - 0.975f * (float)(H);
+    if (hs > 0.0f) jit += hs / (0.025f * (float)(H)) * (30.0f + 20.0f * rnd3(y, f, sd + 4u)) * sc;
+    int sx = x + (int)(jit * amt);
+    float3 a = rgbAt(p_TexR, p_TexG, p_TexB, sx - 1, y, W, H), b = rgbAt(p_TexR, p_TexG, p_TexB, sx, y, W, H), c = rgbAt(p_TexR, p_TexG, p_TexB, sx + 1, y, W, H);
+    float L = (luma(a.x, a.y, a.z) + 2.0f * luma(b.x, b.y, b.z) + luma(c.x, c.y, c.z)) / 4.0f;
+    int sp = (int)(1.0f + 2.5f * vhBleed / 100.0f * sc), lag = (int)(3.0f * sc * vhBleed / 100.0f);
+    float cr = 0.0f, cg = 0.0f, cb = 0.0f;
+    for (int k = -4; k <= 4; k++) {
+        float3 s = rgbAt(p_TexR, p_TexG, p_TexB, sx - lag + k * sp, y, W, H);
+        float ls = luma(s.x, s.y, s.z);
+        cr += s.x - ls; cg += s.y - ls; cb += s.z - ls;
+    }
+    float sat = 0.82f;
+    float3 o = make_float3(L + sat * cr / 9.0f, L + sat * cg / 9.0f, L + sat * cb / 9.0f);
+    o = make_float3(0.045f + 0.93f * o.x, 0.04f + 0.93f * o.y, 0.05f + 0.92f * o.z);
+    float n = (rnd3(x, y, fz) - 0.5f) * (0.05f + 0.10f * vhNoise / 100.0f) * (0.4f + 0.6f * L);
+    float sparkle = inBand > 0.05f && rnd3(x, y, fz + 5u) < 0.02f * inBand ? 0.5f : 0.0f;
+    o = make_float3(o.x + n + sparkle, o.y + n + sparkle, o.z + n + sparkle);
+    if (rnd3(y, f, sd + 6u) < 0.004f * vhDrop / 100.0f * 10.0f) {
+        float st = rnd3(y, f, sd + 7u) * (float)(W), ln = (20.0f + 220.0f * rnd3(y, f, sd + 8u)) * sc;
+        if ((float)(x) > st && (float)(x) < st + ln) o = make_float3(0.85f + 0.1f * n, 0.85f + 0.1f * n, 0.88f);
+    }
+    o = make_float3(lerp1(c0.x, o.x, amt), lerp1(c0.y, o.y, amt), lerp1(c0.z, o.z, amt));
+    return gritFinish(o, x, y, H, amt, 0.35f, vhDither / 100.0f, fz + 9u);
+}

@@ -1,0 +1,80 @@
+// Develop Particles: real things floating in the shot's air, in one transform DCTL. Six styles, each a pure
+// function of position and time (hash-seeded cells, no state), so any frame renders on its own and scrubbing works:
+//   0 Dust: motes drifting in the light, seen only where the scene is lit, glinting as they turn.
+//   1 Embers: embers rising from a fire below (Source), flickering, cooling from orange to red as they rise and
+//     burning out; grey ash carried up with them, lit by the scene.
+//   2 Sparks: sparks thrown from Source along Direction, fast streaks under gravity and drag, white hot at birth,
+//     cooling to red in under a second.
+//   3 Snow: flakes falling in depth, lit by the light round them, the near ones large, soft and faint.
+//   4 Fireflies: cold yellow-green lights that flash and go dark, low over the ground.
+//   5 Orbs: soft steady lights drifting, breathing slowly.
+// Each particle sits at a depth: its size, spacing and speed follow perspective, the lens spreads it by its distance
+// from Focus (Blur), the shutter drags it along its path (Shutter, Frame Rate), and the plate's grain is carried onto
+// it. Light is added in linear (Rec.709 gamma 2.4 in and out); snow and ash cover what is behind them. Particles 0
+// gives the picture back exactly. Develop Particles Depth is the same with a depth map in the alpha.
+//
+// MIT License. Copyright (c) 2026 the Claude Resolve Editing Suite authors. Permission is hereby granted, free of charge,
+// to any person obtaining a copy of this software, to deal in it without restriction, provided the copyright notice
+// and this permission notice are included in all copies. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+// KIND.
+
+DEFINE_UI_PARAMS(ptAmount,  Particles,    DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptStyle,   Style,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 5.0, 1.0)
+DEFINE_UI_PARAMS(ptDensity, Density,      DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptSize,    Size,         DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptSpeed,   Speed,        DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptWind,    Wind,         DCTLUI_SLIDER_FLOAT, 10.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptDir,     Direction,    DCTLUI_SLIDER_FLOAT, 20.0, -180.0, 180.0, 1.0)
+DEFINE_UI_PARAMS(ptSrcX,    Source X,     DCTLUI_SLIDER_FLOAT, 50.0, -50.0, 150.0, 1.0)
+DEFINE_UI_PARAMS(ptSrcY,    Source Y,     DCTLUI_SLIDER_FLOAT, 100.0, -50.0, 150.0, 1.0)
+DEFINE_UI_PARAMS(ptSpread,  Spread,       DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptDepth,   Depth,        DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptDSpread, Depth Spread, DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptFocus,   Focus,        DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 150.0, 1.0)
+DEFINE_UI_PARAMS(ptBlur,    Blur,         DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptShutter, Shutter,      DCTLUI_SLIDER_FLOAT, 180.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(ptFps,     Frame Rate,   DCTLUI_SLIDER_FLOAT, 24.0, 12.0, 120.0, 0.001)
+DEFINE_UI_PARAMS(ptTemp,    Colour,       DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptLit,     Scene Light,  DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptPanX,    Camera Pan,   DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptPanY,    Camera Tilt,  DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptSeed,    Seed,         DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptGlow,    Scene Glow,   DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptSrcGlow, Source Glow,  DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptBursts,  Bursts,       DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptFloor,   Floor Y,      DCTLUI_SLIDER_FLOAT, 150.0, -50.0, 150.0, 1.0)
+DEFINE_UI_PARAMS(ptCamera,  Camera Match, DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ptShotStart, Shot Start s, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 3600.0, 0.01)
+
+DEFINE_UI_TOOLTIP(Style, "0 Dust, 1 Embers, 2 Sparks, 3 Snow, 4 Fireflies, 5 Orbs")
+DEFINE_UI_TOOLTIP(Direction, "Sparks: the throw, degrees from straight up (positive to the right)")
+DEFINE_UI_TOOLTIP(Source X, "Sparks: where they come from; Embers: the middle of the fire (percent of the width)")
+DEFINE_UI_TOOLTIP(Source Y, "Sparks: where they come from; Embers: where they start rising (percent of the height, 100 the bottom edge)")
+DEFINE_UI_TOOLTIP(Spread, "Sparks: the width of the throw; Embers: the width of the fire")
+DEFINE_UI_TOOLTIP(Depth, "How far away the particles are: 50 the style's own, lower farther, higher nearer")
+DEFINE_UI_TOOLTIP(Depth Spread, "How deep the cloud of particles is: 50 the style's own, 0 one plane")
+DEFINE_UI_TOOLTIP(Focus, "The distance in focus: 0 infinity, 100 the nearest thing in the shot, past 100 nearer the lens")
+DEFINE_UI_TOOLTIP(Blur, "The lens: how much particles away from Focus spread into soft discs")
+DEFINE_UI_TOOLTIP(Shutter, "Shutter angle in degrees: 180 is a normal film shutter, 0 no motion blur")
+DEFINE_UI_TOOLTIP(Frame Rate, "The timeline's frame rate, so speeds and motion blur are true")
+DEFINE_UI_TOOLTIP(Colour, "Dust and Snow: a warm or cool tint; Embers and Sparks: hotter or cooler; Fireflies and Orbs: their hue")
+DEFINE_UI_TOOLTIP(Scene Light, "100 the shot's own light decides: dust only in light, snow and ash as bright as their surroundings, glowing particles dimmer in a bright shot")
+DEFINE_UI_TOOLTIP(Camera Pan, "Match a camera move by hand (no baked path): near particles slide more than far ones")
+DEFINE_UI_TOOLTIP(Scene Glow, "Embers, sparks, fireflies and orbs light the picture round them; 50 is natural")
+DEFINE_UI_TOOLTIP(Source Glow, "Sparks: the hot point they leave from, flaring on each burst; 0 when a real fire or grinder is there")
+DEFINE_UI_TOOLTIP(Bursts, "Sparks: the share thrown together in bursts, as when a log pops or a grinder bites")
+DEFINE_UI_TOOLTIP(Floor Y, "Sparks: the floor they land on and bounce off (percent of the height); 140 and over, none")
+DEFINE_UI_TOOLTIP(Camera Match, "With a camera path baked by camera.py: how much the particles move with the scene")
+DEFINE_UI_TOOLTIP(Shot Start s, "With a camera path baked: where the shot's analysed first frame sits on the timeline, seconds from its start")
+
+#include "pcdata.h"
+#include "particles.h"
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float3 c = particlesRun(p_Width, p_Height, p_X, p_Y, p_TexR, p_TexG, p_TexB, p_TexR, 0, ptAmount, ptStyle, ptDensity,
+                            ptSize, ptSpeed, ptWind, ptDir, ptSrcX, ptSrcY, ptSpread, ptDepth, ptDSpread, ptFocus, ptBlur,
+                            ptShutter, ptFps, ptTemp, ptLit, ptPanX, ptPanY, ptSeed, 0.0f, ptShotStart, ptCamera, ptGlow,
+                            ptSrcGlow, ptFloor, ptBursts, TIMELINE_FRAME_INDEX);
+    return make_float3(c.x, c.y, c.z);
+}

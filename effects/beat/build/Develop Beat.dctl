@@ -1,0 +1,503 @@
+// Develop Beat: the picture moves with the music. beat.py bakes a song's beats,
+// downbeats, hits, low hits and band energies into this file (a DCTL cannot read audio); this copy has no song and
+// follows its BPM slider (120 when 0). Seven reactions, each from what an editor does by hand on the beat: Glow
+// (the highlights bloom), Punch In (a cut-in zoom with the blur of its move), Shake (a camera hit that dies away),
+// Flash (an exposure flash, at most 3 a second), Grade Lift (contrast, colour and light lift on the hit), Breathe
+// (the light swells from the centre with the bass), Split (the colours part toward the edges). Amount 0 or a quiet
+// moment gives the picture back exactly. Moves by TIMELINE_FRAME_INDEX, counted from the timeline's start: run it as
+// an OpenFX DCTL effect or a DCTL plugin node, set Music Start to where the song sits on the timeline and Timeline
+// FPS to the timeline's rate. Rec.709 gamma 2.4 in and out. MIT License.
+
+DEFINE_UI_PARAMS(btMode,    Reaction,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 6.0, 1.0)
+DEFINE_UI_PARAMS(btAmount,  Amount,          DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(btSource,  Source,          DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 6.0, 1.0)
+DEFINE_UI_PARAMS(btShape,   Shape,           DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 2.0, 1.0)
+DEFINE_UI_PARAMS(btAttack,  Attack ms,       DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 500.0, 1.0)
+DEFINE_UI_PARAMS(btRelease, Release ms,      DCTLUI_SLIDER_FLOAT, 250.0, 20.0, 2000.0, 1.0)
+DEFINE_UI_PARAMS(btAccent,  Downbeat Accent, DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(btRate,    Max Hits a Second, DCTLUI_SLIDER_FLOAT, 4.0, 1.0, 8.0, 1.0)
+DEFINE_UI_PARAMS(btSize,    Size,            DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(btX,       Center X,        DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(btY,       Center Y,        DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(btWarm,    Warmth,          DCTLUI_SLIDER_FLOAT, 20.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(btFloor,   Band Floor,      DCTLUI_SLIDER_FLOAT, 25.0, 0.0, 90.0, 1.0)
+DEFINE_UI_PARAMS(btNudge,   Nudge Frames,    DCTLUI_SLIDER_FLOAT, 0.0, -6.0, 6.0, 1.0)
+DEFINE_UI_PARAMS(btStart,   Music Start s,   DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 3600.0, 0.01)
+DEFINE_UI_PARAMS(btFps,     Timeline FPS,    DCTLUI_SLIDER_FLOAT, 24.0, 12.0, 120.0, 0.001)
+DEFINE_UI_PARAMS(btBpm,     BPM,             DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 300.0, 0.1)
+
+DEFINE_UI_TOOLTIP(Reaction, "0 Glow, 1 Punch In, 2 Shake, 3 Flash, 4 Grade Lift, 5 Breathe, 6 Split")
+DEFINE_UI_TOOLTIP(Source, "0 Beats, 1 Downbeats, 2 Hits, 3 Low Hits (kick and bass), 4 Bass, 5 Mids, 6 Highs")
+DEFINE_UI_TOOLTIP(Shape, "0 Hit (on the beat, then dies away), 1 Pump (ducks on the beat and breathes back), 2 Swell (rises into the beat)")
+DEFINE_UI_TOOLTIP(Max Hits a Second, "8, 4, 3 or 2: closer hits are thinned, the strongest kept. Glow, Flash, Grade Lift and Breathe never pass 3")
+DEFINE_UI_TOOLTIP(Nudge Frames, "Moves every hit; -1 lands the picture a frame before the sound, as many editors cut")
+DEFINE_UI_TOOLTIP(BPM, "0 follows the baked song; any other value (or no song) follows a steady beat from Music Start")
+
+// Develop light: the shared code of Develop Leak, Develop Burn and Develop Light Dissolve.
+// build.py writes it into each effect, so every installed .dctl stands alone. Rec.709 gamma 2.4 in and out;
+// light is added in linear. Coordinates are in frame heights (y 0 to 1 top to bottom, x 0 to width/height),
+// so a leak keeps its shape at any resolution and aspect. MIT License.
+
+__DEVICE__ float toLin(float x) { return _powf(_fmaxf(x, 0.0f), 2.4f); }
+__DEVICE__ float toDisp(float x) { return _powf(_fmaxf(x, 0.0f), 1.0f / 2.4f); }
+__DEVICE__ float luma(float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; }
+__DEVICE__ float lerp1(float a, float b, float t) { return a + (b - a) * t; }
+__DEVICE__ float sstep(float a, float b, float x) { float t = _saturatef((x - a) / (b - a)); return t * t * (3.0f - 2.0f * t); }
+
+__DEVICE__ float3 shoulder(float r, float g, float b)
+{
+    float m = _fmaxf(r, _fmaxf(g, b));
+    if (m <= 0.8f) return make_float3(r, g, b);
+    float nm = 0.8f + 0.2f * _tanhf((m - 0.8f) / 0.2f);
+    float k = nm / m, w = 0.6f * sstep(1.0f, 3.0f, m);
+    return make_float3(lerp1(r * k, nm, w), lerp1(g * k, nm, w), lerp1(b * k, nm, w));
+}
+
+__DEVICE__ float3 lightOut(float r, float g, float b, float k)
+{
+    float3 s = shoulder(r, g, b);
+    float w = _saturatef(k * 4.0f);
+    return make_float3(_saturatef(toDisp(lerp1(r, s.x, w))), _saturatef(toDisp(lerp1(g, s.y, w))), _saturatef(toDisp(lerp1(b, s.z, w))));
+}
+
+__DEVICE__ float hash01(uint x, uint y, uint z)
+{
+    x = x * 1664525u + 1013904223u; y = y * 1664525u + 1013904223u; z = z * 1664525u + 1013904223u;
+    x += y * z; y += z * x; z += x * y;
+    x ^= x >> 16u; y ^= y >> 16u; z ^= z >> 16u;
+    x += y * z; y += z * x; z += x * y;
+    return (float)(x >> 8u) * (1.0f / 16777216.0f);
+}
+
+__DEVICE__ float fade(float t) { return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f); }
+
+__DEVICE__ float vnoise3(float x, float y, float z, uint s)
+{
+    int ix = (int)(x), iy = (int)(y), iz = (int)(z);
+    float tx = fade(x - (float)(ix)), ty = fade(y - (float)(iy)), tz = fade(z - (float)(iz));
+    uint x0 = (uint)(ix), y0 = (uint)(iy), z0 = (uint)(iz) + s * 7919u;
+    float a0 = lerp1(lerp1(hash01(x0, y0, z0), hash01(x0 + 1u, y0, z0), tx), lerp1(hash01(x0, y0 + 1u, z0), hash01(x0 + 1u, y0 + 1u, z0), tx), ty);
+    float a1 = lerp1(lerp1(hash01(x0, y0, z0 + 1u), hash01(x0 + 1u, y0, z0 + 1u), tx), lerp1(hash01(x0, y0 + 1u, z0 + 1u), hash01(x0 + 1u, y0 + 1u, z0 + 1u), tx), ty);
+    return lerp1(a0, a1, tz);
+}
+
+__DEVICE__ float fbm(float x, float y, float z, int n, uint s)
+{
+    float sum = 0.0f, amp = 0.5f, tot = 0.0f, f = 1.0f;
+    for (int i = 0; i < 5; i++) {
+        if (i >= n) break;
+        sum += amp * vnoise3(x * f + 4096.0f + 37.1f * (float)(i), y * f + 4096.0f + 11.7f * (float)(i), z * f + 4096.0f, s + (uint)(i));
+        tot += amp; amp *= 0.5f; f *= 2.03f;
+    }
+    float v = sum / tot;
+    return _saturatef((v - 0.5f) * 1.6f + 0.5f);
+}
+
+__DEVICE__ float3 ramp(float pal, float t, float age)
+{
+    int p = (int)(pal + 0.5f);
+    float c0r = 0.30f, c0g = 0.10f, c0b = 0.42f, c1r = 0.62f, c1g = 0.35f, c1b = 0.47f, c2r = 0.86f, c2g = 0.76f, c2b = 0.68f;
+    float h0r = 0.73f, h0g = 0.16f, h0b = 0.26f, h1r = 0.89f, h1g = 0.35f, h1b = 0.17f, h2r = 0.94f, h2g = 0.50f, h2b = 0.22f;
+    if (p == 1) {
+        c0r = 0.45f; c0g = 0.08f; c0b = 0.05f; c1r = 0.85f; c1g = 0.30f; c1b = 0.08f; c2r = 0.98f; c2g = 0.70f; c2b = 0.35f;
+        h0r = 0.80f; h0g = 0.20f; h0b = 0.04f; h1r = 0.98f; h1g = 0.55f; h1b = 0.12f; h2r = 1.00f; h2g = 0.85f; h2b = 0.55f;
+    }
+    if (p == 2) {
+        c0r = 0.18f; c0g = 0.10f; c0b = 0.45f; c1r = 0.65f; c1g = 0.25f; c1b = 0.65f; c2r = 0.95f; c2g = 0.70f; c2b = 0.75f;
+        h0r = 0.70f; h0g = 0.15f; h0b = 0.50f; h1r = 0.95f; h1g = 0.45f; h1b = 0.45f; h2r = 1.00f; h2g = 0.75f; h2b = 0.55f;
+    }
+    if (p == 3) {
+        c0r = 0.05f; c0g = 0.10f; c0b = 0.35f; c1r = 0.15f; c1g = 0.40f; c1b = 0.75f; c2r = 0.70f; c2g = 0.85f; c2b = 0.98f;
+        h0r = 0.10f; h0g = 0.25f; h0b = 0.60f; h1r = 0.35f; h1g = 0.65f; h1b = 0.95f; h2r = 0.85f; h2g = 0.95f; h2b = 1.00f;
+    }
+    float a = _saturatef(age);
+    float r0 = lerp1(c0r, h0r, a), g0 = lerp1(c0g, h0g, a), b0 = lerp1(c0b, h0b, a);
+    float r1 = lerp1(c1r, h1r, a), g1 = lerp1(c1g, h1g, a), b1 = lerp1(c1b, h1b, a);
+    float r2 = lerp1(c2r, h2r, a), g2 = lerp1(c2g, h2g, a), b2 = lerp1(c2b, h2b, a);
+    float u = _saturatef(t);
+    float r, g, b;
+    if (u < 0.5f) { float k = u * 2.0f; r = lerp1(r0, r1, k); g = lerp1(g0, g1, k); b = lerp1(b0, b1, k); }
+    else { float k = u * 2.0f - 1.0f; r = lerp1(r1, r2, k); g = lerp1(g1, g2, k); b = lerp1(b1, b2, k); }
+    float hot = sstep(1.0f, 1.4f, t);
+    return make_float3(toLin(lerp1(r, 1.0f, hot)), toLin(lerp1(g, 0.96f, hot)), toLin(lerp1(b, 0.90f, hot)));
+}
+
+__DEVICE__ float leakField(float x, float y, float aspect, float deg, float w, float sc, float z, uint s)
+{
+    float a = deg * 0.0174533f, ca = _cosf(a), sa = _sinf(a);
+    float ext = 0.5f * (_fabs(ca) * aspect + _fabs(sa));
+    float sproj = (x - 0.5f * aspect) * ca + (y - 0.5f) * sa;
+    float warp = fbm(x * 1.3f, y * 1.3f, z * 0.35f, 2, s + 40u) - 0.5f;
+    float d = _fmaxf(ext - sproj + 0.45f * warp * w * aspect, 0.0f);
+    float reach = _fmaxf(w * aspect, 0.02f);
+    float e = _expf(-(d / reach) * (d / reach));
+    float cloud = fbm(x / sc, y / sc, z, 3, s);
+    return _saturatef(e * (0.35f + 1.3f * cloud));
+}
+
+__DEVICE__ float burnHeat(float x, float y, float cover, float sc, float z, uint s)
+{
+    float wx = fbm(x / sc * 0.7f, y / sc * 0.7f, z * 0.6f, 2, s + 90u) - 0.5f;
+    float wy = fbm(x / sc * 0.7f + 31.0f, y / sc * 0.7f, z * 0.6f, 2, s + 91u) - 0.5f;
+    float h = fbm((x + 0.6f * wx) / sc, (y + 0.6f * wy) / sc, z, 4, s);
+    float th = 1.0f - cover;
+    return _saturatef((h - th + 0.28f) / 0.62f);
+}
+
+__DEVICE__ float dust(int px, int py, int h, float amount, uint z)
+{
+    float sc = (float)(h) / 1080.0f;
+    int cx = (int)((float)(px) / (2.5f * sc)), cy = (int)((float)(py) / (2.5f * sc));
+    float r = hash01((uint)(cx), (uint)(cy), z * 13u + 5u);
+    float lim = 0.00002f * amount;
+    if (r > lim) return 0.0f;
+    return hash01((uint)(cx), (uint)(cy), z * 13u + 6u) < 0.6f ? -1.0f : 1.0f;
+}
+
+__DEVICE__ float4 burnOver(float r, float g, float b, float x, float y, float aspect, int px, int py, int ph,
+                           float cover, float pal, float age, float sc, float show, float grain, float dst,
+                           float z, uint fz, uint s)
+{
+    float k = sstep(0.0f, 0.35f, burnHeat(x, y, cover, sc, z, s));
+    uint zi = (uint)(z + 1000.0f);
+    float ang = 6.2831853f * ((float)(zi % 1000u) * 0.37f + 0.25f * hash01(zi, s, 71u));
+    float ca = _cosf(ang), sa = _sinf(ang), ext = 0.5f * (_fabs(ca) * aspect + _fabs(sa));
+    float band = 0.5f + 0.5f * ((x - 0.5f * aspect) * ca + (y - 0.5f) * sa) / ext;
+    float cl = fbm(x / (sc * 1.6f), y / (sc * 1.6f), z, 3, s + 200u);
+    float t = 0.05f + 0.95f * _saturatef(0.8f * band + 0.95f * (cl - 0.5f) + 0.15f);
+    float3 c = ramp(pal, t, age);
+    float keep = lerp1(1.0f, show, k);
+    float gr = 1.0f + grain * 0.22f * (hash01((uint)(px), (uint)(py), fz * 3u + s) - 0.5f) * k;
+    float d = dust(px, py, ph, dst * 100.0f, fz + s) * k;
+    float rr = (r * keep + c.x * k) * gr, gg = (g * keep + c.y * k) * gr, bb = (b * keep + c.z * k) * gr;
+    if (d < 0.0f) { rr *= 0.15f; gg *= 0.12f; bb *= 0.12f; }
+    if (d > 0.0f) { rr = rr + 0.6f; gg = gg + 0.55f; bb = bb + 0.45f; }
+    return make_float4(rr, gg, bb, k);
+}
+// Develop Beat's envelope engine: the music data a song was baked into (btdata.h, or the grid of a BPM when
+// no song is baked) turned into one value 0 to 1 per frame for any slider. A DCTL cannot read audio, so beat.py
+// writes the song's events into constant tables: each beat, hit and low hit as one float (its time in hundredths
+// of a second times 128, plus 7 bits: its tier, its place in the bar or a downbeat flag, its strength), and the
+// bass, mid and high energies 8 times a second as one float (three bytes). Times are in seconds, so a song baked
+// once plays at any timeline rate. Every name here starts with bt so the engine can be written into any Develop
+// effect (effects/beat/drive.py). MIT License.
+
+// BT_DATA_BEGIN
+// Develop Beat's music data. This copy holds no song: the effect follows its BPM slider. effects/beat/beat.py
+// writes a song's beats, hits, low hits and band energies here (see effects/beat/README.md). MIT License.
+// meta: beats, hits, low hits, curve samples, curve samples a second, tempo, meter, seconds
+__CONSTANT__ float BT_META[8] = { 0.0f, 0.0f, 0.0f, 0.0f, 8.0f, 0.0f, 4.0f, 0.0f };
+__CONSTANT__ float BT_BEAT[1] = { 0.0f };
+__CONSTANT__ float BT_HIT[1] = { 0.0f };
+__CONSTANT__ float BT_KICK[1] = { 0.0f };
+__CONSTANT__ float BT_CURVE[1] = { 0.0f };
+// BT_DATA_END
+
+__DEVICE__ float btSmooth(float a, float b, float x) { float t = _saturatef((x - a) / (b - a)); return t * t * (3.0f - 2.0f * t); }
+
+__DEVICE__ float btRaw(int s, int i)
+{
+    if (s == 0) return BT_BEAT[i];
+    if (s == 1) return BT_HIT[i];
+    return BT_KICK[i];
+}
+
+__DEVICE__ float btFe(float v, float fps) { return _floorf(_floorf(v / 128.0f) * fps / 100.0f + 0.5f); }
+
+__DEVICE__ int btLast(int s, int n, float tf, float fps)
+{
+    int lo = 0, hi = n - 1, r = -1;
+    while (lo <= hi) {
+        int m = (lo + hi) >> 1;
+        if (btFe(btRaw(s, m), fps) <= tf) { r = m; lo = m + 1; } else { hi = m - 1; }
+    }
+    return r;
+}
+
+__DEVICE__ float btPass(int s, float v, int src, float minTier, float accent)
+{
+    float pay = v - 128.0f * _floorf(v / 128.0f);
+    float tier = pay - 4.0f * _floorf(pay / 4.0f);
+    if (tier < minTier - 0.5f) return 0.0f;
+    if (s == 0) {
+        float bar = _floorf(pay / 4.0f) - 8.0f * _floorf(pay / 32.0f);
+        float bs = _floorf(pay / 32.0f);
+        if (src == 1 && bar > 0.5f) return 0.0f;
+        return (bar < 0.5f ? 1.0f : 1.0f - accent) * (0.8f + 0.2f * bs / 3.0f);
+    }
+    float down = _floorf(pay / 4.0f) - 2.0f * _floorf(pay / 8.0f);
+    float hs = _floorf(pay / 8.0f);
+    return (down > 0.5f ? 1.0f : 1.0f - accent) * (0.35f + 0.65f * hs / 15.0f);
+}
+
+__DEVICE__ float btAfter(float dt, float s, int shape, float rel)
+{
+    if (shape == 0) return s * _expf(-2.302585f * dt / rel);
+    if (shape == 1) return s * (1.0f - btSmooth(0.0f, rel, dt));
+    return s * _expf(-2.302585f * dt / 1.5f);
+}
+
+__DEVICE__ float btBefore(float d, float s, int shape, float atk, float rel)
+{
+    float len = shape == 2 ? rel : atk;
+    if (len <= 0.0f || d >= len) return 0.0f;
+    float u = 1.0f - d / len;
+    return s * u * u;
+}
+
+__DEVICE__ float btFinish(float duck, float near, int shape, float fps)
+{
+    if (shape != 1) return duck;
+    return (1.0f - duck) * (1.0f - btSmooth(2.0f * fps, 4.0f * fps, near));
+}
+
+__DEVICE__ float btEventEnv(int src, float tf, float fps, int shape, float atk, float rel, float accent, float minTier)
+{
+    int s = src < 2 ? 0 : src - 1;
+    int n = (int)(BT_META[s]);
+    if (n <= 0) return 0.0f;
+    int i = btLast(s, n, tf, fps);
+    float e = 0.0f, near = 1e9f;
+    int found = 0;
+    for (int j = i; j >= 0 && j > i - 32 && found < 3; j--) {
+        float v = btRaw(s, j);
+        float st = btPass(s, v, src, minTier, accent);
+        if (st > 0.001f) {
+            float dt = tf - btFe(v, fps);
+            if (found == 0) near = dt;
+            e = _fmaxf(e, btAfter(dt, st, shape, rel));
+            found = found + 1;
+        }
+    }
+    for (int j = i + 1; j < n && j < i + 33; j++) {
+        float v = btRaw(s, j);
+        float st = btPass(s, v, src, minTier, accent);
+        if (st > 0.001f) {
+            float d = btFe(v, fps) - tf;
+            near = _fminf(near, d);
+            e = _fmaxf(e, btBefore(d, st, shape, atk, rel));
+            break;
+        }
+    }
+    return btFinish(e, near, shape, fps);
+}
+
+__DEVICE__ float btGridEnv(int src, float tf, float fps, float bpm, float meter, int shape, float atk, float rel, float accent, float minTier)
+{
+    float spb = 60.0f / bpm;
+    float pf = fps * spb;
+    float gap = minTier > 2.5f ? 0.5f : (minTier > 1.5f ? 0.36f : (minTier > 0.5f ? 0.25f : 0.125f));
+    float stride = src == 1 ? meter : 1.0f;
+    for (int k = 0; k < 6 && stride * spb < gap - 0.0001f; k++) stride = stride * 2.0f;
+    float kb = _floorf(tf / (pf * stride));
+    if (_floorf(kb * stride * pf + 0.5f) > tf) kb = kb - 1.0f;
+    if (_floorf((kb + 1.0f) * stride * pf + 0.5f) <= tf) kb = kb + 1.0f;
+    float e = 0.0f, near = 1e9f;
+    for (int k = 0; k < 3; k++) {
+        float nb = (kb - k) * stride;
+        if (nb < 0.0f) break;
+        float fe = _floorf(nb * pf + 0.5f);
+        float bar = nb - meter * _floorf(nb / meter);
+        float st = bar < 0.5f ? 1.0f : 1.0f - accent;
+        if (k == 0) near = tf - fe;
+        if (st > 0.001f) e = _fmaxf(e, btAfter(tf - fe, st, shape, rel));
+    }
+    float nn = (kb + 1.0f) * stride;
+    if (nn >= 0.0f) {
+        float fe = _floorf(nn * pf + 0.5f);
+        float bar = nn - meter * _floorf(nn / meter);
+        float st = bar < 0.5f ? 1.0f : 1.0f - accent;
+        near = _fminf(near, fe - tf);
+        if (st > 0.001f) e = _fmaxf(e, btBefore(fe - tf, st, shape, atk, rel));
+    }
+    return btFinish(e, near, shape, fps);
+}
+
+__DEVICE__ float btBand(float v, int band)
+{
+    float lo = _floorf(v / 65536.0f);
+    float mi = _floorf(v / 256.0f) - 256.0f * lo;
+    float hi = v - 65536.0f * lo - 256.0f * mi;
+    return (band == 0 ? lo : (band == 1 ? mi : hi)) / 255.0f;
+}
+
+__DEVICE__ float btCurve(int band, float tsec)
+{
+    int n = (int)(BT_META[3]);
+    if (n <= 0 || tsec < 0.0f) return 0.0f;
+    float x = tsec * BT_META[4];
+    if (x >= n - 1.0f) return x > n ? 0.0f : btBand(BT_CURVE[n - 1], band);
+    int i = (int)(_floorf(x));
+    float f = x - _floorf(x);
+    return btBand(BT_CURVE[i], band) * (1.0f - f) + btBand(BT_CURVE[i + 1], band) * f;
+}
+
+__DEVICE__ float btEnv(float frame, float startS, float nudge, float fps, int src, int shape, float atk, float rel, float accent, float minTier, float bpm, float floorv)
+{
+    float tf = frame - _floorf(startS * fps + 0.5f) - nudge;
+    float rl = _fmaxf(rel, 0.5f);
+    float e = 0.0f;
+    if (src >= 4) {
+        float v = btCurve(src - 4, tf / fps);
+        e = _saturatef((v - floorv) / _fmaxf(0.001f, 1.0f - floorv));
+        if (shape == 1) e = (tf < 0.0f || tf / fps > BT_META[7]) ? 0.0f : 1.0f - e;
+        if (shape == 2) e = e * e;
+    } else if (bpm > 0.5f || BT_META[7] <= 0.0f) {
+        e = btGridEnv(src, tf, fps, bpm > 0.5f ? bpm : 120.0f, _fmaxf(1.0f, BT_META[6]), shape, atk, rl, accent, minTier);
+    } else {
+        e = btEventEnv(src, tf, fps, shape, atk, rl, accent, minTier);
+    }
+    return e < 0.004f ? 0.0f : _saturatef(e);
+}
+
+__DEVICE__ float btTier(float rate, int bright)
+{
+    float t = rate >= 7.99f ? 0.0f : (rate >= 3.99f ? 1.0f : (rate >= 2.77f ? 2.0f : 3.0f));
+    return bright == 1 ? _fmaxf(t, 2.0f) : t;
+}
+
+__DEVICE__ float3 btTap(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int w, int h, float x, float y)
+{
+    float fx = _clampf(x, 0.0f, w - 1.0f), fy = _clampf(y, 0.0f, h - 1.0f);
+    int x0 = (int)(_floorf(fx)), y0 = (int)(_floorf(fy));
+    int x1 = x0 + 1 < w ? x0 + 1 : w - 1;
+    int y1 = y0 + 1 < h ? y0 + 1 : h - 1;
+    float ax = fx - _floorf(fx), ay = fy - _floorf(fy);
+    float r = lerp1(lerp1(_tex2D(tr, x0, y0), _tex2D(tr, x1, y0), ax), lerp1(_tex2D(tr, x0, y1), _tex2D(tr, x1, y1), ax), ay);
+    float g = lerp1(lerp1(_tex2D(tg, x0, y0), _tex2D(tg, x1, y0), ax), lerp1(_tex2D(tg, x0, y1), _tex2D(tg, x1, y1), ax), ay);
+    float b = lerp1(lerp1(_tex2D(tb, x0, y0), _tex2D(tb, x1, y0), ax), lerp1(_tex2D(tb, x0, y1), _tex2D(tb, x1, y1), ax), ay);
+    return make_float3(r, g, b);
+}
+
+__DEVICE__ float3 btZoom(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int w, int h, float px, float py, float cx, float cy, float z, float z0)
+{
+    float zs = z - 0.5f * (z - z0);
+    int n = _fabs(z - zs) * _fmaxf(w, h) > 1.0f ? 8 : 1;
+    float r = 0.0f, g = 0.0f, b = 0.0f;
+    for (int k = 0; k < n; k++) {
+        float zk = n == 1 ? z : lerp1(zs, z, (k + 0.5f) / n);
+        float3 c = btTap(tr, tg, tb, w, h, cx + (px - cx) / zk, cy + (py - cy) / zk);
+        r += c.x; g += c.y; b += c.z;
+    }
+    return make_float3(r / n, g / n, b / n);
+}
+
+__DEVICE__ float3 btShakeAt(float ts, float a, float freq, int h)
+{
+    float u = ts * freq + 4096.0f;
+    float nx = vnoise3(u, 3.5f, 0.5f, 11u) + 0.5f * vnoise3(u * 2.03f, 7.5f, 0.5f, 12u) - 0.75f;
+    float ny = vnoise3(u, 17.5f, 0.5f, 13u) + 0.5f * vnoise3(u * 2.03f, 21.5f, 0.5f, 14u) - 0.75f;
+    float nr = vnoise3(u * 0.8f, 31.5f, 0.5f, 15u) - 0.5f;
+    return make_float3(nx * a * 0.07f * h, ny * a * 0.07f * h, nr * a * 0.035f);
+}
+
+__DEVICE__ float3 btShake(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int w, int h, float px, float py, float3 s, float3 s0, float z)
+{
+    float cx = 0.5f * w, cy = 0.5f * h;
+    int n = _fabs(s.x - s0.x) + _fabs(s.y - s0.y) + _fabs(s.z - s0.z) * h > 0.75f ? 7 : 1;
+    float r = 0.0f, g = 0.0f, b = 0.0f;
+    for (int k = 0; k < n; k++) {
+        float f = n == 1 ? 1.0f : 0.5f + 0.5f * (k + 0.5f) / n;
+        float ox = lerp1(s0.x, s.x, f), oy = lerp1(s0.y, s.y, f), an = lerp1(s0.z, s.z, f);
+        float dx = (px - cx) / z, dy = (py - cy) / z;
+        float ca = _cosf(an), sa = _sinf(an);
+        float3 c = btTap(tr, tg, tb, w, h, cx + ca * dx - sa * dy - ox, cy + sa * dx + ca * dy - oy);
+        r += c.x; g += c.y; b += c.z;
+    }
+    return make_float3(r / n, g / n, b / n);
+}
+
+__DEVICE__ float3 btGlow(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int w, int h, float px, float py, float rad)
+{
+    float r = 0.0f, g = 0.0f, b = 0.0f, ws = 0.0f;
+    for (int k = 0; k < 48; k++) {
+        float q = _sqrtf((k + 0.5f) / 48.0f);
+        float an = k * 2.399963f;
+        int sx = (int)(_clampf(px + rad * q * _cosf(an) + 0.5f, 0.0f, w - 1.0f));
+        int sy = (int)(_clampf(py + rad * q * _sinf(an) + 0.5f, 0.0f, h - 1.0f));
+        float lr = toLin(_tex2D(tr, sx, sy)), lg = toLin(_tex2D(tg, sx, sy)), lb = toLin(_tex2D(tb, sx, sy));
+        float l = luma(lr, lg, lb);
+        float k2 = _fmaxf(l - 0.45f, 0.0f);
+        float hl = k2 * k2 / (k2 + 0.1f) / _fmaxf(l, 0.0001f);
+        float wt = _expf(-2.5f * q * q);
+        r += wt * hl * lr; g += wt * hl * lg; b += wt * hl * lb; ws += wt;
+    }
+    return make_float3(r / ws, g / ws, b / ws);
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float ir = _tex2D(p_TexR, p_X, p_Y), ig = _tex2D(p_TexG, p_X, p_Y), ib = _tex2D(p_TexB, p_X, p_Y);
+    int mode = (int)(btMode + 0.5f);
+    int src = (int)(btSource + 0.5f);
+    int shape = (int)(btShape + 0.5f);
+    float fps = btFps;
+    int bright = (mode == 0 || mode == 3 || mode == 4 || mode == 5) ? 1 : 0;
+    float tier = btTier(btRate, bright);
+    float atk = btAttack * fps / 1000.0f, rel = btRelease * fps / 1000.0f;
+    float frame = TIMELINE_FRAME_INDEX;
+    float e = btEnv(frame, btStart, btNudge, fps, src, shape, atk, rel, btAccent / 100.0f, tier, btBpm, btFloor / 100.0f);
+    float a = btAmount / 100.0f * e;
+    if (a <= 0.0f) return make_float3(ir, ig, ib);
+    int w = p_Width, h = p_Height;
+    float px = p_X, py = p_Y;
+    float cx = btX / 100.0f * w, cy = btY / 100.0f * h;
+    float warm = btWarm / 100.0f;
+    float lr = toLin(ir), lg = toLin(ig), lb = toLin(ib);
+
+    if (mode == 1 || mode == 2 || mode == 6) {
+        float e0 = btEnv(frame - 1.0f, btStart, btNudge, fps, src, shape, atk, rel, btAccent / 100.0f, tier, btBpm, btFloor / 100.0f);
+        float a0 = btAmount / 100.0f * e0;
+        float3 c;
+        if (mode == 1) {
+            c = btZoom(p_TexR, p_TexG, p_TexB, w, h, px, py, cx, cy, 1.0f + 0.2f * a, 1.0f + 0.2f * a0);
+        } else if (mode == 2) {
+            float freq = 3.0f + 9.0f * btSize / 100.0f;
+            float ts = (frame - _floorf(btStart * fps + 0.5f)) / fps;
+            float3 s = btShakeAt(ts, a, freq, h);
+            float3 s0 = btShakeAt(ts - 0.5f / fps, 0.5f * (a + a0), freq, h);
+            c = btShake(p_TexR, p_TexG, p_TexB, w, h, px, py, s, s0, 1.0f + 0.16f * a);
+        } else {
+            float sp = 0.014f * a * (0.5f + btSize / 100.0f);
+            float rr = 0.0f, bb = 0.0f;
+            for (int k = 0; k < 3; k++) {
+                float s = sp * (0.55f + 0.45f * k);
+                float3 cr = btTap(p_TexR, p_TexG, p_TexB, w, h, cx + (px - cx) / (1.0f + s), cy + (py - cy) / (1.0f + s));
+                float3 cb = btTap(p_TexR, p_TexG, p_TexB, w, h, cx + (px - cx) / (1.0f - s), cy + (py - cy) / (1.0f - s));
+                rr += cr.x; bb += cb.z;
+            }
+            c = make_float3(rr / 3.0f, ig, bb / 3.0f);
+        }
+        return make_float3(_saturatef(c.x), _saturatef(c.y), _saturatef(c.z));
+    }
+    float or_ = lr, og = lg, ob = lb;
+    if (mode == 0) {
+        float rad = (0.012f + 0.07f * btSize / 100.0f) * h;
+        float3 gl = btGlow(p_TexR, p_TexG, p_TexB, w, h, px, py, rad);
+        float gain = 2.4f * a;
+        or_ = lr * (1.0f + 0.06f * a) + gain * gl.x * (1.0f + 0.25f * warm);
+        og = lg * (1.0f + 0.06f * a) + gain * gl.y;
+        ob = lb * (1.0f + 0.06f * a) + gain * gl.z * (1.0f - 0.25f * warm);
+    } else if (mode == 3) {
+        float k = _exp2f(1.6f * a);
+        float lift = 0.006f * a;
+        or_ = lr * k * (1.0f + 0.08f * warm * a) + lift; og = lg * k + lift; ob = lb * k * (1.0f - 0.08f * warm * a) + lift;
+    } else if (mode == 4) {
+        float con = 1.0f + 0.3f * a, sat = 1.0f + 0.35f * a, ev = 0.4f * a;
+        float pv = _log2f(0.18f);
+        float l0 = _fmaxf(luma(lr, lg, lb), 0.000001f);
+        float l1 = _exp2f((_log2f(l0) - pv) * con + pv + ev);
+        float k = l1 / l0;
+        float yr = lr * k, yg = lg * k, yb = lb * k;
+        float yl = luma(yr, yg, yb);
+        or_ = _fmaxf(yl + (yr - yl) * sat, 0.0f); og = _fmaxf(yl + (yg - yl) * sat, 0.0f); ob = _fmaxf(yl + (yb - yl) * sat, 0.0f);
+    } else {
+        float dx = (px - cx) / (0.5f * h), dy = (py - cy) / (0.5f * h);
+        float r2 = _fminf(dx * dx + dy * dy, 1.6f);
+        float k = _exp2f(0.9f * a * (1.0f - 0.45f * r2));
+        float tw = 0.04f * a * warm;
+        or_ = lr * k * (1.0f + tw); og = lg * k; ob = lb * k * (1.0f - tw);
+    }
+    float3 o = lightOut(or_, og, ob, a);
+    return o;
+}

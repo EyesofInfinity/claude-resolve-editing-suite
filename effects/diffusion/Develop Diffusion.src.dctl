@@ -1,0 +1,189 @@
+// Develop Diffusion: diffusion filters and atmosphere in one transform DCTL. Each is built from the glass, the
+// fabric, the film or the
+// air, with the light scattered in linear (Rec.709 gamma 2.4) and the clipped highlights given back the brightness the
+// camera could not hold (Highlights), so they bloom as a real filter blooms a light far brighter than white:
+//   0 Black Mist: a black mist filter. A small share of all light scatters (the black specks absorb rather than veil,
+//     so shadows lift only a little); the highlights' light scatters with a steep power-law halo, bright near the
+//     light and falling far out.
+//   1 Diffusion: a white mist or diffusion filter: more of all light scattered, wider, so shadows go milky and
+//     contrast drops, the highlights glowing broadly.
+//   2 Fog: a fog filter. A wide veil of the picture's own light lifts the blacks (a fog filter does, a mist filter
+//     barely), the highlights glow out far, and detail softens a little.
+//   3 Double Fog: twice the veil with the definition kept: the halo is tight and most of the scatter goes into the
+//     veil. Depth thickens it toward the top of the frame, where the distance usually is.
+//   4 Frost: frosted glass: a gaussian scatter of moderate width, the scattered light pale and a little cool.
+//   5 Soft Focus: a soft focus lens. Its spherical aberration lays an out-of-focus disc of each point under the sharp
+//     image (Softness the disc's edge), so the picture keeps its lines and glows.
+//   6 Net: a net stocking behind the lens. The weave diffracts every light into a soft cross along the threads
+//     (Angle), the colours parting toward the tips (Colour); the rest of the picture softens a very little.
+//   7 Silk: a silk stocking. A short scatter fills fine dark texture with the light around it while edges keep their
+//     sharp core; the weave sprays a faint six-point sheen off the highlights; the light a touch ivory.
+//   8 Center Spot: a centre spot filter: clear glass at Position (Spot its size, Softness its edge), a soft focus and
+//     glow around it.
+//   9 Halo: a corona round each light, as thin cloud of droplets of one size throws round the moon: a soft bright
+//     ring (Size), red outside and blue inside (Colour), an aureole within.
+//   10 Atmospheric Glow: forward scattering in hazy air. The lights throw a long aureole, a haze of the scene's own
+//     light lifts and pales the frame, warmed by Warmth; Depth thickens it toward the top.
+//   11 Film Glow: film's halation and bloom. Light that passed the emulsion reflects off the base and comes back as a
+//     tight red-orange fringe round every highlight (Colour how red), with a soft bloom of the light over it.
+//   12 Smoke and Fog: a slow drifting bank of smoke and fog over the picture (Density, Speed, Angle the drift, Depth
+//     how low it pools), two layers at two depths, billowing as it moves, lit by the scene's own light around it.
+// Modes 0 to 11 hold still, as a filter on a lens does; Smoke and Fog moves by TIMELINE_FRAME_INDEX. An OpenFX DCTL
+// effect or a DCTL plugin node. Amount mixes with the picture in display terms; Amount 0 or Strength 0 is the input
+// exactly. MIT License.
+
+DEFINE_UI_PARAMS(dfAmount,   Diffusion,   DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dfMode,     Mode,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 12.0, 1.0)
+DEFINE_UI_PARAMS(dfStrength, Strength,    DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dfSize,     Size,        DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dfThresh,   Threshold,   DCTLUI_SLIDER_FLOAT, 70.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dfHigh,     Highlights,  DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dfWarm,     Warmth,      DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dfColour,   Colour,      DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dfAngle,    Angle,       DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 180.0, 1.0)
+DEFINE_UI_PARAMS(dfX,        Position X,  DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dfY,        Position Y,  DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dfSpot,     Spot,        DCTLUI_SLIDER_FLOAT, 45.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dfSoft,     Softness,    DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dfDepth,    Depth,       DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dfDensity,  Density,     DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dfSpeed,    Speed,       DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dfSeed,     Seed,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Mode, "0 Black Mist, 1 Diffusion, 2 Fog, 3 Double Fog, 4 Frost, 5 Soft Focus, 6 Net, 7 Silk, 8 Center Spot, 9 Halo, 10 Atmospheric Glow, 11 Film Glow, 12 Smoke and Fog")
+DEFINE_UI_TOOLTIP(Strength, "The filter's grade: 50 about a quarter, 100 about a two; Smoke and Fog how thick")
+DEFINE_UI_TOOLTIP(Size, "How far the light scatters; the halo's radius; the smoke's scale")
+DEFINE_UI_TOOLTIP(Threshold, "Where the highlights begin to bloom (display brightness)")
+DEFINE_UI_TOOLTIP(Highlights, "How much brighter the clipped highlights were than white: how strongly they bloom")
+DEFINE_UI_TOOLTIP(Warmth, "The scattered light's colour, warm above 0, cool below")
+DEFINE_UI_TOOLTIP(Colour, "Net, Silk and Halo: how far the colours part; Film Glow: how red the halation")
+DEFINE_UI_TOOLTIP(Angle, "Net and Silk: the weave's angle; Smoke and Fog: the drift's direction")
+DEFINE_UI_TOOLTIP(Spot, "Center Spot: the clear spot's size")
+DEFINE_UI_TOOLTIP(Softness, "Center Spot: its edge; Soft Focus: the halo disc's edge")
+DEFINE_UI_TOOLTIP(Depth, "Double Fog and Atmospheric Glow: thicker toward the top; Smoke and Fog: how low it pools")
+DEFINE_UI_TOOLTIP(Density, "Smoke and Fog: how much of the frame it covers")
+
+#include "diffusion.h"
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (dfAmount <= 0.0f || dfStrength <= 0.0f) return c0;
+    int m = (int)(dfMode + 0.5f);
+    float sc = (float)(H) / 1080.0f, fx = (float)(x), fy = (float)(y), Hf = (float)(H);
+    float z = _exp2f((dfSize - 50.0f) / 25.0f), k = dfStrength / 50.0f;
+    float thr = _fminf(dfThresh / 100.0f, 0.96f), pk = 1.0f + 9.0f * dfHigh / 100.0f;
+    float col = dfColour / 100.0f, soft = dfSoft / 100.0f, dep = dfDepth / 100.0f, v = (fy + 0.5f) / Hf;
+    uint sd = (uint)(dfSeed) * 613u + 7u;
+    float rot = 6.2831853f * hash01((uint)(x) + 4096u, (uint)(y) + 4096u, sd + 1u), jit = hash01((uint)(x) + 4096u, (uint)(y) + 4096u, sd);
+    float rA = _fmaxf(sc, 0.7f);
+    float3 c = make_float3(_saturatef(c0.x), _saturatef(c0.y), _saturatef(c0.z));
+    float3 L = make_float3(toLin(c.x), toLin(c.y), toLin(c.z));
+    float keep = 1.0f, tb = 0.0f, sat = 1.0f;
+    float3 G = make_float3(0.0f, 0.0f, 0.0f);
+    float df = lerp1(1.0f, 0.3f + 1.4f * (1.0f - v), dep);
+    if (m == 0) {
+        float rB = 200.0f * sc * z;
+        int nR = clampi((int)(_logf(rB / rA) / 0.1655144f) + 1, 2, 48);
+        float sA = 0.05f * k;
+        G = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 0, 1.5f * sc, 2.25f, 0, rA, rB, nR, 24, sA, 0.11f * k, thr, pk, 0.0f, rot, jit, 2, 1, W, H);
+        keep = 1.0f - sA;
+    } else if (m == 1) {
+        float rB = 240.0f * sc * z;
+        int nR = clampi((int)(_logf(rB / rA) / 0.1655144f) + 1, 2, 48);
+        float sA = _fminf(0.16f * k, 0.6f);
+        G = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 0, 2.0f * sc, 2.3f, 0, rA, rB, nR, 24, sA, 0.09f * k, thr, pk, 0.0f, rot, jit, 2, 1, W, H);
+        keep = 1.0f - sA; tb = 0.05f; sat = 0.85f;
+    } else if (m == 2) {
+        float rB = 220.0f * sc * z;
+        int nR = clampi((int)(_logf(rB / rA) / 0.1655144f) + 1, 2, 48);
+        float sA = _fminf(0.08f * k, 0.3f), sV = _fminf(0.24f * k, 0.6f);
+        float3 g1 = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 0, 3.0f * sc, 2.0f, 0, rA, rB, nR, 24, sA, 0.10f * k, thr, pk, 0.0f, rot, jit, 2, 1, W, H);
+        float3 g2 = veilD(p_TexR, p_TexG, p_TexB, fx, fy, 0.22f * Hf * z, sV, 0.04f * k, thr, pk, W, H);
+        G = make_float3(g1.x + g2.x, g1.y + g2.y, g1.z + g2.z);
+        keep = 1.0f - sA - sV; sat = 0.9f;
+    } else if (m == 3) {
+        float rB = 100.0f * sc * z;
+        int nR = clampi((int)(_logf(rB / rA) / 0.1655144f) + 1, 2, 48);
+        float sV = _fminf(0.34f * k * df, 0.85f);
+        float3 g1 = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 0, 2.0f * sc, 2.6f, 0, rA, rB, nR, 24, 0.0f, 0.05f * k, thr, pk, 0.0f, rot, jit, 2, 1, W, H);
+        float3 g2 = veilD(p_TexR, p_TexG, p_TexB, fx, fy, 0.30f * Hf * z, sV, 0.04f * k * df, thr, pk, W, H);
+        G = make_float3(g1.x + g2.x, g1.y + g2.y, g1.z + g2.z);
+        keep = 1.0f - sV; sat = 0.9f;
+    } else if (m == 4) {
+        float sg = 16.0f * sc * z, sA = _fminf(0.28f * k, 0.8f);
+        int nR = clampi((int)(_logf(2.6f * sg / rA) / 0.1655144f) + 1, 2, 48);
+        G = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 1, sg, 0.0f, 0, rA, 2.6f * sg, nR, 16, sA, 0.12f * k, thr, pk, 0.0f, rot, jit, 1, 0, W, H);
+        keep = 1.0f - sA; tb = -0.2f; sat = 0.45f;
+    } else if (m == 5) {
+        float R = 18.0f * sc * z, sA = _fminf(0.40f * k, 0.85f);
+        G = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 2, R, 0.15f + 0.7f * soft, 1, 0.0f, R, 16, 24, sA, 0.25f * k, thr, pk, 0.0f, rot, jit, 1, 0, W, H);
+        keep = 1.0f - sA;
+    } else if (m == 6) {
+        float lam = 24.0f * sc * z, sS = _fminf(0.18f * k, 0.5f);
+        float3 g1 = armsD(p_TexR, p_TexG, p_TexB, fx, fy, dfAngle * 0.0174533f, 2, _fminf(4.5f * lam, 128.0f), lam, 0.0f, 0.32f * k, thr, pk, 0.15f * col, jit, W, H);
+        float sg = 1.3f * sc;
+        float3 g2 = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 1, sg, 0.0f, 1, 0.0f, 3.0f * sg, 4, 8, sS, 0.0f, thr, pk, 0.0f, rot, jit, 1, 0, W, H);
+        G = make_float3(g1.x + g2.x, g1.y + g2.y, g1.z + g2.z);
+        keep = 1.0f - sS;
+    } else if (m == 7) {
+        float sg = 5.0f * sc * z, sA = _fminf(0.34f * k, 0.8f), lam = 6.0f * sc * z;
+        int nR = clampi((int)(_logf(2.6f * sg / rA) / 0.1655144f) + 1, 2, 48);
+        float3 g1 = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 1, sg, 0.0f, 0, rA, 2.6f * sg, nR, 16, sA, 0.06f * k, thr, pk, 0.0f, rot, jit, 1, 0, W, H);
+        float3 g2 = armsD(p_TexR, p_TexG, p_TexB, fx, fy, dfAngle * 0.0174533f, 3, _fminf(5.0f * lam, 60.0f), lam, 0.0f, 0.025f * k, thr, pk, 0.10f * col, jit, W, H);
+        G = make_float3(g1.x + g2.x, g1.y + g2.y, g1.z + g2.z);
+        keep = 1.0f - sA; tb = 0.07f;
+    } else if (m == 8) {
+        float dx = (fx - dfX / 100.0f * (float)(W)) / Hf, dy = (fy - dfY / 100.0f * Hf) / Hf;
+        float Rs = 0.05f + 0.6f * dfSpot / 100.0f, fe = 0.03f + 0.5f * soft;
+        float mk = sstep(Rs, Rs + fe, _sqrtf(dx * dx + dy * dy));
+        if (mk <= 0.0f) return c0;
+        float R = 22.0f * sc * z, sA = _fminf(0.70f * k, 0.92f) * mk;
+        G = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 2, R, 0.5f, 1, 0.0f, R, 16, 24, sA, 0.25f * k * mk, thr, pk, 0.0f, rot, jit, 1, 0, W, H);
+        keep = 1.0f - sA;
+    } else if (m == 9) {
+        float R = 90.0f * sc * z, wd = 0.18f * R;
+        G = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 3, R, wd, 1, 0.5f * sc, R + 3.0f * wd, 20, 24, 0.12f * k, 0.25f * k, thr, pk, 0.08f * col, rot, jit, 2, 0, W, H);
+        keep = 1.0f - 0.12f * k;
+    } else if (m == 10) {
+        float rB = 0.45f * Hf * z;
+        int nR = clampi((int)(_logf(rB / rA) / 0.1655144f) + 1, 2, 48);
+        float sV = _fminf(0.16f * k * df, 0.7f);
+        float3 g1 = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 0, 4.0f * sc, 1.7f, 0, rA, rB, nR, 24, 0.0f, 0.16f * k, thr, pk, 0.0f, rot, jit, 1, 1, W, H);
+        float3 g2 = veilD(p_TexR, p_TexG, p_TexB, fx, fy, 0.18f * Hf * z, sV, 0.06f * k * df, thr, pk, W, H);
+        G = make_float3(g1.x + g2.x, g1.y + g2.y, g1.z + g2.z);
+        keep = 1.0f - sV; tb = 0.5f; sat = 0.6f;
+    } else if (m == 11) {
+        float lm = 3.5f * sc * z, sg = 14.0f * sc * z;
+        int n1 = clampi((int)(_logf(5.0f * lm / rA) / 0.1655144f) + 1, 2, 48), n2 = clampi((int)(_logf(2.6f * sg / rA) / 0.1655144f) + 1, 2, 48);
+        float3 g1 = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 4, lm, 0.0f, 0, 0.5f * rA, 5.0f * lm, n1, 16, 0.0f, 0.16f * k, thr, pk, 0.0f, rot, jit, 1, 0, W, H);
+        float3 g2 = gatherD(p_TexR, p_TexG, p_TexB, fx, fy, 1, sg, 0.0f, 0, rA, 2.6f * sg, n2, 16, 0.0f, 0.09f * k, thr, pk, 0.0f, rot + 1.3f, jit, 1, 0, W, H);
+        float hy = luma(g1.x, g1.y, g1.z);
+        float3 hc = make_float3(hy * lerp1(1.4f, 2.6f, col), hy * lerp1(0.9f, 0.55f, col), hy * lerp1(0.75f, 0.08f, col));
+        float3 g3 = tintD(g2, 0.15f + dfWarm / 100.0f, 1.0f);
+        float3 o = filmOutD(L.x + hc.x + g3.x, L.y + hc.y + g3.y, L.z + hc.z + g3.z);
+        float a = dfAmount / 100.0f;
+        return make_float3(_saturatef(lerp1(c0.x, o.x, a)), _saturatef(lerp1(c0.y, o.y, a)), _saturatef(lerp1(c0.z, o.z, a)));
+    } else {
+        float3 fl = veilD(p_TexR, p_TexG, p_TexB, fx, fy, 0.06f * Hf, 1.0f, 0.5f, thr, pk, W, H);
+        float3 fa = veilD(p_TexR, p_TexG, p_TexB, fx, fy, 0.35f * Hf, 1.0f, 0.2f, thr, pk, W, H);
+        float3 fc = tintD(make_float3(0.7f * fl.x + 0.3f * fa.x, 0.7f * fl.y + 0.3f * fa.y, 0.7f * fl.z + 0.3f * fa.z), dfWarm / 100.0f, 0.8f);
+        fc = make_float3(fc.x + 0.7f * _fmaxf(L.x - fc.x, 0.0f), fc.y + 0.7f * _fmaxf(L.y - fc.y, 0.0f), fc.z + 0.7f * _fmaxf(L.z - fc.z, 0.0f));
+        float t = (float)(TIMELINE_FRAME_INDEX) / 24.0f * (0.2f + 2.8f * dfSpeed / 100.0f);
+        float an = dfAngle * 0.0174533f, ca = _cosf(an), sa = _sinf(an) * 0.4f;
+        float dens = dfDensity / 100.0f, u = fx / Hf;
+        float d1 = smokeD(u, v, t, 0.30f * z, 0.08f * ca, 0.08f * sa, dens, sd + 300u) * (0.35f + 0.45f * dens);
+        float d2 = smokeD(u, v, t, 0.65f * z, 0.18f * ca, 0.18f * sa, dens, sd + 400u) * (0.25f + 0.45f * dens);
+        float gf = lerp1(1.0f, sstep(0.05f, 0.95f, v), 0.35f + 0.65f * dep);
+        float D = _fminf((1.0f - (1.0f - d1 * gf) * (1.0f - d2 * gf)) * k, 0.92f);
+        if (D <= 0.0f) return c0;
+        float3 o = outD(L.x * (1.0f - D) + D * fc.x, L.y * (1.0f - D) + D * fc.y, L.z * (1.0f - D) + D * fc.z, _fmaxf(L.x, _fmaxf(L.y, L.z)), D);
+        float a = dfAmount / 100.0f;
+        return make_float3(_saturatef(lerp1(c0.x, o.x, a)), _saturatef(lerp1(c0.y, o.y, a)), _saturatef(lerp1(c0.z, o.z, a)));
+    }
+    if (tb > -8.0f) G = tintD(G, tb + dfWarm / 100.0f, sat);
+    float3 o = outD(L.x * keep + G.x, L.y * keep + G.y, L.z * keep + G.z, _fmaxf(L.x, _fmaxf(L.y, L.z)), luma(G.x, G.y, G.z));
+    float a = dfAmount / 100.0f;
+    return make_float3(_saturatef(lerp1(c0.x, o.x, a)), _saturatef(lerp1(c0.y, o.y, a)), _saturatef(lerp1(c0.z, o.z, a)));
+}

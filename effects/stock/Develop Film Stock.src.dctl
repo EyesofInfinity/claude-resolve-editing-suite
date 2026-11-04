@@ -1,0 +1,94 @@
+// Develop Film Stock: a library of film characters. Our own stocks, built from what each kind of film does, named by character, not after any maker's product:
+//   0 Daylight Negative: a soft warm negative, gentle toe, cream highlights, greens kept natural.
+//   1 Tungsten Night: a tungsten-balanced negative under mixed light: teal shadows, warm practicals.
+//   2 Vivid Slide: a saturated reversal film: hard, deep blues and greens, no lifted black.
+//   3 Portrait Negative: low contrast and low saturation, pastel highlights, kind to skin.
+//   4 Faded Print: a 1970s print whose cyan dye has faded: red and magenta mids, lifted purple blacks, low colour.
+//   5 Home Movie: small-gauge reversal: warm, contrasty, a dark round gate.
+//   6 Expired: old stock fogged green in the shadows, magenta highlights, thin colour.
+//   7 Silver Mono: panchromatic black and white, a little red sensitive.
+// Then the trims (Contrast, Saturation, Warmth, Fade), halation, grain sized by the stock, and Wear: a projector's
+// flicker, gate weave and dust, moving by TIMELINE_FRAME_INDEX. An OpenFX DCTL effect or a DCTL plugin node. Amount
+// mixes with the picture in display terms; Amount 0 is the input exactly. MIT License.
+
+DEFINE_UI_PARAMS(fsAmount,  Film Stock,  DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fsStock,   Stock,       DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 7.0, 1.0)
+DEFINE_UI_PARAMS(fsCon,     Contrast,    DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fsSat,     Saturation,  DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fsWarm,    Warmth,      DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fsFade,    Fade,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fsHal,     Halation,    DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fsGrain,   Grain,       DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fsWear,    Wear,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fsSeed,    Seed,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Stock, "0 Daylight Negative, 1 Tungsten Night, 2 Vivid Slide, 3 Portrait Negative, 4 Faded Print, 5 Home Movie, 6 Expired, 7 Silver Mono")
+DEFINE_UI_TOOLTIP(Wear, "A projector's flicker, gate weave and dust")
+
+#include "stock.h"
+
+__DEVICE__ float3 stockLook(int k, float3 l, float vig)
+{
+    float3 one = make_float3(1.0f, 1.0f, 1.0f), zero = make_float3(0.0f, 0.0f, 0.0f);
+    if (k == 0) return toneDisp(disp3(satLin(l, 1.0f)), 1.6f, 0.44f, make_float3(0.96f, 1.0f, 1.07f), make_float3(-0.01f, 0.0f, 0.015f),
+                                make_float3(0.035f, 0.018f, -0.03f), 0.03f, 0.96f);
+    if (k == 1) return toneDisp(disp3(satLin(l, 0.92f)), 2.0f, 0.46f, make_float3(1.08f, 1.0f, 0.9f), make_float3(-0.025f, 0.02f, 0.05f),
+                                make_float3(0.04f, 0.012f, -0.02f), 0.015f, 0.98f);
+    if (k == 2) return toneDisp(disp3(satLin(l, 1.4f)), 3.4f, 0.47f, make_float3(1.0f, 1.0f, 0.97f), make_float3(0.0f, 0.0f, 0.012f),
+                                zero, 0.0f, 1.0f);
+    if (k == 3) return toneDisp(disp3(satLin(l, 0.82f)), 0.8f, 0.44f, make_float3(0.99f, 1.0f, 1.01f), zero,
+                                make_float3(0.016f, 0.01f, 0.0f), 0.03f, 0.96f);
+    if (k == 4) return toneDisp(disp3(satLin(l, 0.72f)), -0.8f, 0.5f, make_float3(0.84f, 1.0f, 1.03f), make_float3(0.03f, 0.0f, 0.025f),
+                                make_float3(0.01f, -0.005f, -0.02f), 0.08f, 0.92f);
+    if (k == 5) {
+        float3 v = toneDisp(disp3(satLin(l, 1.18f)), 3.6f, 0.47f, make_float3(0.95f, 1.0f, 1.1f), make_float3(0.0f, 0.0f, 0.0f),
+                            make_float3(0.03f, 0.014f, -0.02f), 0.0f, 0.98f);
+        return make_float3(v.x * vig, v.y * vig, v.z * vig);
+    }
+    if (k == 6) return toneDisp(disp3(satLin(l, 0.7f)), 1.0f, 0.46f, make_float3(1.0f, 0.94f, 1.08f), make_float3(-0.02f, 0.06f, 0.0f),
+                                make_float3(0.05f, -0.025f, 0.035f), 0.07f, 0.94f);
+    float m = _fmaxf(0.36f * l.x + 0.52f * l.y + 0.12f * l.z, 0.0f);
+    float3 v = toneDisp(disp3(make_float3(m, m, m)), 2.4f, 0.45f, one, zero, zero, 0.012f, 0.985f);
+    return v;
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (fsAmount <= 0.0f) return c0;
+    int k = (int)(fsStock + 0.5f);
+    float sc = (float)(H) / 1080.0f, wear = fsWear / 100.0f;
+    int f = TIMELINE_FRAME_INDEX;
+    uint sd = (uint)(fsSeed) * 977u + 29u;
+    int sx = x, sy = y;
+    if (wear > 0.0f) {
+        float wx = (rnd3(f, 1, sd) + rnd3(f - 1, 1, sd) + rnd3(f - 2, 1, sd)) / 3.0f - 0.5f;
+        float wy = (rnd3(f, 2, sd) + rnd3(f - 1, 2, sd) + rnd3(f - 2, 2, sd)) / 3.0f - 0.5f;
+        sx = x + (int)(_round(wx * 6.0f * sc * wear));
+        sy = y + (int)(_round(wy * 9.0f * sc * wear));
+    }
+    float3 c = rgbAt(p_TexR, p_TexG, p_TexB, sx, sy, W, H);
+    float aspect = (float)(W) / (float)(H);
+    float ux = ((float)(x) + 0.5f) / (float)(H) - 0.5f * aspect, uy = ((float)(y) + 0.5f) / (float)(H) - 0.5f;
+    float rr = _sqrtf(ux * ux / (aspect * aspect * 0.25f) + uy * uy / 0.25f);
+    float vig = 1.0f - 0.55f * sstep(0.55f, 1.35f, rr);
+    float3 v = stockLook(k, lin3(c), vig);
+    v = trims(sat3(v), fsCon, fsSat, fsWarm, fsFade);
+    float hk = k == 2 ? 0.6f : (k == 7 ? 0.5f : (k == 5 ? 1.3f : 1.0f));
+    float3 hl = halation(p_TexR, p_TexG, p_TexB, sx, sy, W, H, 14.0f * sc, fsHal / 100.0f * 0.6f * hk, k == 7 ? 1.0f : 0.0f);
+    float3 vl = lin3(v);
+    float fl = 1.0f + wear * 0.08f * (rnd3(f, 3, sd) - 0.5f);
+    v = sat3(disp3(make_float3((vl.x + hl.x) * fl, (vl.y + hl.y) * fl, (vl.z + hl.z) * fl)));
+    float gc = k == 2 ? 1.2f : (k == 5 ? 2.6f : (k == 6 ? 2.0f : 1.6f));
+    uint fz = (uint)(f) * 7919u + sd;
+    v = grainDisp(v, x, y, H, fsGrain / 100.0f, gc, fz);
+    if (wear > 0.0f) {
+        float d = dust(x, y, H, wear * 8.0f, (uint)(f) + sd);
+        if (d < 0.0f) v = make_float3(v.x * 0.15f, v.y * 0.15f, v.z * 0.15f);
+        if (d > 0.0f) v = make_float3(0.92f, 0.9f, 0.86f);
+    }
+    if (k == 7) { float m = luma(v.x, v.y, v.z); v = make_float3(m, m, m); }
+    float a = fsAmount / 100.0f;
+    return sat3(mix3(c0, sat3(v), a));
+}

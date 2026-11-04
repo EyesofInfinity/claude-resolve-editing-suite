@@ -1,0 +1,75 @@
+// Develop Glint: star glints on bright points. Each pixel gathers the light of bright points lying along the star's arms (Points 4 to 8), falling off
+// with distance; only small bright points glint (a point weighs more than a broad bright area), the star turns by
+// Spin and each point twinkles on its own; Rainbow runs the arms through the spectrum toward their tips. Light is
+// added in linear. Moves by TIMELINE_FRAME_INDEX: run it as an OpenFX DCTL effect or a DCTL plugin node. MIT License.
+
+DEFINE_UI_PARAMS(gnAmount, Glint,       DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gnThresh, Threshold,   DCTLUI_SLIDER_FLOAT, 80.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gnLength, Length,      DCTLUI_SLIDER_FLOAT, 40.0, 1.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gnPoints, Points,      DCTLUI_SLIDER_FLOAT, 4.0, 4.0, 8.0, 2.0)
+DEFINE_UI_PARAMS(gnAngle,  Angle,       DCTLUI_SLIDER_FLOAT, 20.0, 0.0, 180.0, 1.0)
+DEFINE_UI_PARAMS(gnSpin,   Spin,        DCTLUI_SLIDER_FLOAT, 6.0, -60.0, 60.0, 1.0)
+DEFINE_UI_PARAMS(gnTwinkle, Twinkle,    DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gnRainbow, Rainbow,    DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Spin, "Degrees a second the star turns")
+DEFINE_UI_TOOLTIP(Points, "4, 6 or 8 arms")
+
+#include "../light/light.h"
+#include "../glitch/glitch.h"
+
+__DEVICE__ float3 hueRGB2(float h)
+{
+    float k = _fmod(h / 60.0f + 600.0f, 6.0f);
+    return make_float3(toLin(_saturatef(_fabs(k - 3.0f) - 1.0f)), toLin(_saturatef(2.0f - _fabs(k - 2.0f))), toLin(_saturatef(2.0f - _fabs(k - 4.0f))));
+}
+
+__DEVICE__ float pointLight(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int x, int y, int w, int h, float thr, float rr)
+{
+    float L = lumaAt(tr, tg, tb, x, y, w, h);
+    if (L < thr) return 0.0f;
+    float ring = 0.0f;
+    for (int i = 0; i < 8; i++) {
+        float a = (float)(i) * 0.7853982f;
+        ring = _fmaxf(ring, lumaAt(tr, tg, tb, x + (int)(rr * _cosf(a)), y + (int)(rr * _sinf(a)), w, h));
+    }
+    float pt = sstep(0.3f, 0.9f, 1.0f - ring / _fmaxf(L, 1e-4f) + 0.35f);
+    return (L - thr) / _fmaxf(1.0f - thr, 0.05f) * pt;
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (gnAmount <= 0.0f) return c0;
+    float sc = (float)(H) / 1080.0f, thr = gnThresh / 100.0f;
+    float len = (8.0f + 2.2f * gnLength) * sc;
+    int arms = (int)(gnPoints + 0.5f);
+    float t = (float)(TIMELINE_FRAME_INDEX) / 24.0f;
+    float base = (gnAngle + gnSpin * t) * 0.0174533f;
+    float rr = 6.0f * sc;
+    float ar = 0.0f, ag = 0.0f, ab = 0.0f;
+    for (int arm = 0; arm < 8; arm++) {
+        if (arm >= arms) break;
+        float a = base + 6.2831853f * (float)(arm) / (float)(arms);
+        float ca = _cosf(a), sa = _sinf(a);
+        for (int j = 1; j <= 20; j++) {
+            float d = len * (float)(j) / 20.0f;
+            int sx = x - (int)(d * ca), sy = y - (int)(d * sa);
+            float pl = pointLight(p_TexR, p_TexG, p_TexB, sx, sy, W, H, thr, rr);
+            if (pl <= 0.0f) continue;
+            uint cx = (uint)((int)(sx / 8) + 4096), cy = (uint)((int)(sy / 8) + 4096);
+            float tw = 1.0f - gnTwinkle / 100.0f * (0.5f + 0.5f * _sinf(6.2831853f * (0.6f + 0.8f * hash01(cx, cy, 5u)) * t + 6.2831853f * hash01(cx, cy, 6u)));
+            float fall = _expf(-3.0f * (float)(j) / 20.0f) * pl * tw;
+            float3 s = rgbAt(p_TexR, p_TexG, p_TexB, sx, sy, W, H);
+            float3 hc = hueRGB2(40.0f + 300.0f * (float)(j) / 20.0f);
+            float rb = gnRainbow / 100.0f * sstep(0.1f, 0.6f, (float)(j) / 20.0f);
+            ar += fall * lerp1(toLin(s.x) * 0.5f + 0.5f, hc.x, rb);
+            ag += fall * lerp1(toLin(s.y) * 0.5f + 0.5f, hc.y, rb);
+            ab += fall * lerp1(toLin(s.z) * 0.5f + 0.5f, hc.z, rb);
+        }
+    }
+    float gain = 1.6f * gnAmount / 100.0f;
+    float r = toLin(c0.x) + ar * gain, g = toLin(c0.y) + ag * gain, b = toLin(c0.z) + ab * gain;
+    return lightOut(r, g, b, _saturatef((ar + ag + ab) * gain));
+}

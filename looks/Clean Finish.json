@@ -1,0 +1,8 @@
+{
+ "schema": "develop.look/0",
+ "name": "Clean Finish",
+ "values": {
+  "deband": 40,
+  "filmGrain": 8
+ }
+}

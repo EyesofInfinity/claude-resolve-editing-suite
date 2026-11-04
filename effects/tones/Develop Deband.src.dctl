@@ -1,0 +1,123 @@
+// Develop Deband: smooths the contour bands of an 8-bit gradient and dithers it so the delivered file holds the
+// gradient. A transform DCTL: lay it on a node after the grade.
+// Night skies, mist, fog and lifted indigo blacks arrive from 8-bit sources as runs of one code value with a step of
+// one code between them, and a grade that stretches the shadows makes each step larger. This finds the flat places
+// (the 3 x 3 neighbourhood within Threshold of the pixel), and there replaces the pixel with the mean of rings of
+// samples around it out to Radius. Each ring is four points in two opposite pairs, so a straight gradient averages back
+// to itself. A ring is dropped whole when a pair's mean lies past Threshold from the pixel (an edge or a line between
+// them) or a point lies past about two Thresholds (texture, or soft shading the reach would flatten), so the mean
+// never reaches across an edge or into texture. The rings turn and change radius per pixel and per frame, so the steps
+// dissolve into a smooth ramp with no pattern of their own. Then a fine dither (white noise less its neighbours' mean, a
+// blue-leaning grain, new each frame) of about one 8-bit code goes onto the flat places, so an 8-bit encode keeps a
+// gradient instead of re-cutting the bands. Pure black and pure white (bars, cards) take no dither.
+//   Amount: 0 returns the input exactly
+//   Threshold: the largest step, in 8-bit codes, that counts as a band (grades that stretch the shadows need more)
+//   Radius: how far the rings reach, in pixels at 1080 (wider bands need more)
+//   Dither: the grain's strength in 8-bit codes; Grain Size its cell: 1 is one pixel at any resolution, what it adds
+//   above 1 counts in pixels at 1080
+//   View: 0 the result, 1 the places it smooths (white is full smoothing)
+// Rec.709 gamma 2.4 display values in and out. MIT License.
+
+DEFINE_UI_PARAMS(dbAmount, Amount,      DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(dbThresh, Threshold,   DCTLUI_SLIDER_FLOAT, 3.0, 0.5, 10.0, 0.1)
+DEFINE_UI_PARAMS(dbRadius, Radius,      DCTLUI_SLIDER_FLOAT, 64.0, 4.0, 128.0, 1.0)
+DEFINE_UI_PARAMS(dbDither, Dither,      DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 3.0, 0.1)
+DEFINE_UI_PARAMS(dbGrain,  Grain Size,  DCTLUI_SLIDER_FLOAT, 1.0, 1.0, 6.0, 0.1)
+DEFINE_UI_PARAMS(dbView,   View,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Amount, "0 returns the input exactly")
+DEFINE_UI_TOOLTIP(Threshold, "The largest step in 8-bit codes that counts as a band; raise it after a grade that stretches the shadows")
+DEFINE_UI_TOOLTIP(Radius, "How far the smoothing reaches, pixels at 1080")
+DEFINE_UI_TOOLTIP(Dither, "Grain strength in 8-bit codes, so an 8-bit encode keeps the gradient")
+DEFINE_UI_TOOLTIP(View, "0 the result, 1 the places it smooths")
+
+#include "../light/light.h"
+
+__DEVICE__ float tapC(__TEXTURE__ t, int x, int y, int W, int H)
+{
+    int xx = x < 0 ? 0 : (x > W - 1 ? W - 1 : x);
+    int yy = y < 0 ? 0 : (y > H - 1 ? H - 1 : y);
+    return _tex2D(t, xx, yy);
+}
+
+__DEVICE__ float diffC(float r0, float g0, float b0, float r1, float g1, float b1)
+{
+    float dr = _fabs(_saturatef(r1) - _saturatef(r0)), dg = _fabs(_saturatef(g1) - _saturatef(g0)), db = _fabs(_saturatef(b1) - _saturatef(b0));
+    return _fmaxf(dr, _fmaxf(dg, db));
+}
+
+__DEVICE__ float cellN(float x, float y, float s, float z, uint seed)
+{
+    return vnoise3(x / s + 4096.0f, y / s + 4096.0f, z + 4096.0f, seed);
+}
+
+__DEVICE__ float blueN(float x, float y, float s, float z, uint seed)
+{
+    float c = cellN(x, y, s, z, seed);
+    float m = cellN(x - s, y, s, z, seed) + cellN(x + s, y, s, z, seed) + cellN(x, y - s, s, z, seed) + cellN(x, y + s, s, z, seed);
+    return (c - 0.25f * m) / 0.323f;
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float r = _tex2D(p_TexR, p_X, p_Y), g = _tex2D(p_TexG, p_X, p_Y), b = _tex2D(p_TexB, p_X, p_Y);
+    float amt = dbAmount / 100.0f;
+    if (amt <= 0.0f) return make_float3(r, g, b);
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float sc = (float)(H) / 1080.0f;
+    float T = dbThresh / 255.0f;
+    uint fi = (uint)(TIMELINE_FRAME_INDEX);
+
+    float dl = 0.0f;
+    for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
+            if (i == 0 && j == 0) continue;
+            float d = diffC(r, g, b, tapC(p_TexR, x + i, y + j, W, H), tapC(p_TexG, x + i, y + j, W, H), tapC(p_TexB, x + i, y + j, W, H));
+            dl = _fmaxf(dl, d);
+        }
+    }
+    float flat = 1.0f - sstep(T, 1.5f * T, dl);
+
+    float sr = 0.0f, sg = 0.0f, sb = 0.0f, sw = 0.0f;
+    if (flat > 0.0f) {
+        float rad0 = dbRadius * sc;
+        float th0 = 6.2831853f * hash01((uint)(x) + 4096u, (uint)(y) + 4096u, fi * 3u + 1u);
+        for (int k = 0; k < 8; k++) {
+            float hr = hash01((uint)(x) + 8192u, (uint)(y) + 4096u, fi * 3u + 2u + (uint)(k) * 7919u);
+            float rad = _fmaxf(rad0 * _sqrtf(((float)(k) + hr) / 8.0f), 1.0f);
+            float an = th0 + 2.3999632f * (float)(k);
+            int ox = (int)(_floorf(rad * _cosf(an) + 0.5f)), oy = (int)(_floorf(rad * _sinf(an) + 0.5f));
+            float r1 = tapC(p_TexR, x + ox, y + oy, W, H), g1 = tapC(p_TexG, x + ox, y + oy, W, H), b1 = tapC(p_TexB, x + ox, y + oy, W, H);
+            float r2 = tapC(p_TexR, x - ox, y - oy, W, H), g2 = tapC(p_TexG, x - ox, y - oy, W, H), b2 = tapC(p_TexB, x - ox, y - oy, W, H);
+            float r3 = tapC(p_TexR, x - oy, y + ox, W, H), g3 = tapC(p_TexG, x - oy, y + ox, W, H), b3 = tapC(p_TexB, x - oy, y + ox, W, H);
+            float r4 = tapC(p_TexR, x + oy, y - ox, W, H), g4 = tapC(p_TexG, x + oy, y - ox, W, H), b4 = tapC(p_TexB, x + oy, y - ox, W, H);
+            float d2 = _fmaxf(diffC(r, g, b, 0.5f * (r1 + r2), 0.5f * (g1 + g2), 0.5f * (b1 + b2)), diffC(r, g, b, 0.5f * (r3 + r4), 0.5f * (g3 + g4), 0.5f * (b3 + b4)));
+            float d1 = _fmaxf(_fmaxf(diffC(r, g, b, r1, g1, b1), diffC(r, g, b, r2, g2, b2)), _fmaxf(diffC(r, g, b, r3, g3, b3), diffC(r, g, b, r4, g4, b4)));
+            float w = (1.0f - sstep(0.5f * T, T, d2)) * (1.0f - sstep(1.5f * T, 2.5f * T, d1));
+            sr += w * (r1 + r2 + r3 + r4); sg += w * (g1 + g2 + g3 + g4); sb += w * (b1 + b2 + b3 + b4);
+            sw += w;
+        }
+    }
+    float er = (r + sr) / (1.0f + 4.0f * sw), eg = (g + sg) / (1.0f + 4.0f * sw), eb = (b + sb) / (1.0f + 4.0f * sw);
+    float kk = amt * flat;
+    float orr = r + (er - r) * kk, og = g + (eg - g) * kk, ob = b + (eb - b) * kk;
+    float shown = flat * sw / 8.0f;
+    if (dbView > 0.5f) return make_float3(shown, shown, shown);
+
+    float dz = dbDither / 255.0f * amt * flat * 0.5f;
+    if (dz > 0.0f) {
+        float gs = _fmaxf(1.0f + (dbGrain - 1.0f) * sc, 1.0f);
+        float fx = (float)(x), fy = (float)(y), z = (float)(fi);
+        float n0 = blueN(fx, fy, gs, z, 11u);
+        float nr = blueN(fx, fy, gs, z, 23u), ng = blueN(fx, fy, gs, z, 37u), nb = blueN(fx, fy, gs, z, 41u);
+        float hi = _fmaxf(_saturatef(orr), _fmaxf(_saturatef(og), _saturatef(ob)));
+        float lo = _fminf(_saturatef(orr), _fminf(_saturatef(og), _saturatef(ob)));
+        float keep = sstep(0.0f, 2.0f / 255.0f, hi) * sstep(0.0f, 2.0f / 255.0f, 1.0f - lo);
+        float q = dz * keep;
+        orr += q * (n0 + 0.33f * nr); og += q * (n0 + 0.33f * ng); ob += q * (n0 + 0.33f * nb);
+        orr = _fminf(_fmaxf(orr, _fminf(r, 0.0f)), _fmaxf(r, 1.0f));
+        og = _fminf(_fmaxf(og, _fminf(g, 0.0f)), _fmaxf(g, 1.0f));
+        ob = _fminf(_fmaxf(ob, _fminf(b, 0.0f)), _fmaxf(b, 1.0f));
+    }
+    return make_float3(orr, og, ob);
+}

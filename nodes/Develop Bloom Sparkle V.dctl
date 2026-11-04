@@ -1,0 +1,40 @@
+// Develop Bloom, sparkle and veil, pass 2 of 2: the vertical half of the blurs from Develop Bloom Sparkle H,
+// then the sparkle (a tight glow on small bright points) and veil (scattered light lifting the
+// surroundings), tinted by Bloom Warmth. Out: the added light, linear times 1/8, for a Bloom Layer Mixer input.
+// Bloom Spread must match Sparkle H. MIT License.
+
+DEFINE_UI_PARAMS(bloomSpr,   Bloom Spread,  DCTLUI_SLIDER_FLOAT, 40.0, 1.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bloomSpark, Bloom Sparkle, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bloomVeil,  Bloom Veil,    DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bloomWarm,  Bloom Warmth,  DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Bloom Sparkle, "A tight glow on small bright points: glints on water, specular highlights")
+DEFINE_UI_TOOLTIP(Bloom Veil, "Scattered light lifts the surroundings a touch, the haze of a diffusion filter")
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float rad = bloomSpr / 100.0f * 0.06f * (float)p_Height + 1.0f;
+    float sw = rad / 2.2360680f * 0.8812f, ss = (rad * 0.15f + 1.5f) / 2.4494897f * 0.9181f;
+    int kw = (int)(3.0f * sw) + 1, ks = (int)(3.0f * ss) + 1;
+    float iw = -0.5f / (sw * sw), is = -0.5f / (ss * ss);
+    float accW = 0.0f, accM = 0.0f, accSW = 0.0f, accS = 0.0f;
+    for (int i = -kw; i <= kw; i++)
+    {
+        int y = p_Y + i;
+        y = y < 0 ? 0 : (y > p_Height - 1 ? p_Height - 1 : y);
+        float d2 = (float)(i * i);
+        float w = _expf(d2 * iw);
+        accW += w; accM += w * _tex2D(p_TexB, p_X, y);
+        if (i >= -ks && i <= ks)
+        {
+            float v = _expf(d2 * is);
+            accSW += v; accS += v * _tex2D(p_TexG, p_X, y);
+        }
+    }
+    float spark = accS / accSW * (bloomSpark / 100.0f) * 2.5f;
+    float veilL = accM / accW * (bloomVeil / 100.0f) * 0.12f;
+    float wt = bloomWarm / 100.0f;
+    return make_float3((spark * (1.0f + 0.35f * wt) + veilL) * 0.125f,
+                       (spark * (1.0f + 0.05f * wt) + veilL) * 0.125f,
+                       (spark * (1.0f - 0.35f * wt) + veilL) * 0.125f);
+}

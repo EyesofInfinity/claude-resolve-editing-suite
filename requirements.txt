@@ -1,0 +1,4 @@
+# The core: the grade tools and the cut tools. python -m pip install -r requirements.txt
+numpy
+opencv-python
+faster-whisper

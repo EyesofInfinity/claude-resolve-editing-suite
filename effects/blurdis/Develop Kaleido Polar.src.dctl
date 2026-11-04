@@ -1,0 +1,147 @@
+// Develop Kaleido Polar: a polar kaleidoscope and a fly's eye of round lenses in one transform DCTL (Develop Kaleido
+// has the radial, tiled, hexagon and scrambled ones).
+//   0 Polar: the frame folded by mirrors in angle (Slices) and in distance from Center X, Y (Rings), so mirrored rings
+//     of slices repeat out from the centre, each ring the same size to the eye; the picture turns behind the mirrors
+//     (Spin) and the rings flow outward or inward (Flow).
+//   1 Fly's Eye Circles: a packed array of round lenslets, each a small dome that holds the picture seen from its own
+//     place (View: 0 its own patch, 100 the whole frame), darker toward its rim, a glint on its upper left; the gaps
+//     between them show the picture darkened (Gap).
+// Every tap is bilinear in linear light (Rec.709 gamma 2.4), and as many taps a pixel as the squeeze of the picture asks
+// for, offset per pixel, so the fine rings at the centre and the minified pictures in the lenses never alias into
+// moire. Mix 0 returns the picture exactly. Moves by TIMELINE_FRAME_INDEX (Spin, Flow): run it as an OpenFX DCTL effect
+// or a DCTL plugin node. MIT License.
+
+DEFINE_UI_PARAMS(kpMode,   Mode,       DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 1.0)
+DEFINE_UI_PARAMS(kpMix,    Mix,        DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(kpSlices, Slices,     DCTLUI_SLIDER_FLOAT, 6.0, 2.0, 16.0, 1.0)
+DEFINE_UI_PARAMS(kpRings,  Rings,      DCTLUI_SLIDER_FLOAT, 3.0, 1.0, 8.0, 1.0)
+DEFINE_UI_PARAMS(kpZoom,   Zoom,       DCTLUI_SLIDER_FLOAT, 50.0, 10.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(kpSpin,   Spin,       DCTLUI_SLIDER_FLOAT, 8.0, -90.0, 90.0, 1.0)
+DEFINE_UI_PARAMS(kpFlow,   Flow,       DCTLUI_SLIDER_FLOAT, 20.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(kpCell,   Cell,       DCTLUI_SLIDER_FLOAT, 25.0, 2.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(kpView,   View,       DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(kpGap,    Gap,        DCTLUI_SLIDER_FLOAT, 70.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(kpGlint,  Glint,      DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(kpCX,     Center X,   DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(kpCY,     Center Y,   DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Mode, "0 Polar, 1 Fly's Eye Circles")
+DEFINE_UI_TOOLTIP(Rings, "Polar: mirrored rings from the centre to the frame's edge")
+DEFINE_UI_TOOLTIP(Zoom, "Polar: how deep into the picture each ring reaches")
+DEFINE_UI_TOOLTIP(Spin, "Polar: degrees a second the picture turns behind the mirrors")
+DEFINE_UI_TOOLTIP(Flow, "Polar: rings a second flowing outward (negative: inward), at 100 one a second")
+DEFINE_UI_TOOLTIP(Cell, "Fly's Eye: lens size, percent of the frame height / 2")
+DEFINE_UI_TOOLTIP(View, "Fly's Eye: how much each lens sees, 0 its own patch, 100 the whole frame")
+DEFINE_UI_TOOLTIP(Gap, "Fly's Eye: how dark the picture shows between the lenses")
+
+#include "../lens/lens.h"
+
+__DEVICE__ float jitK(int x, int y, int f)
+{
+    return hash01((uint)(x + 16384), (uint)(y + 16384), (uint)(f + 1) * 2654435u + 977u);
+}
+
+__DEVICE__ float foldM(float x, float L)
+{
+    float m = _fmod(x, 2.0f * L);
+    if (m < 0.0f) m += 2.0f * L;
+    return m > L ? 2.0f * L - m : m;
+}
+
+__DEVICE__ float3 polarSrc(float ux, float uy, float seg, float lb, float ring, float r0, float rz, float rot, float mx, float my)
+{
+    float r = _fmaxf(_sqrtf(ux * ux + uy * uy), 0.25f), a = _atan2f(uy, ux);
+    float af = foldM(a, 0.5f * seg);
+    float rho = _logf(r) - ring;
+    float u = foldM(rho, lb) / lb;
+    float rs = r0 + rz * u, sa = af + rot - 1.5707963f;
+    float sq = _fmaxf(rz / (lb * r), rs / r);
+    return make_float3(mx + rs * _cosf(sa), my + rs * _sinf(sa), sq);
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (kpMix <= 0.0f) return c0;
+    int mode = (int)(kpMode + 0.5f);
+    float t = (float)(TIMELINE_FRAME_INDEX) / 24.0f;
+    float fw = (float)(W), fh = (float)(H), fx = (float)(x), fy = (float)(y);
+    float mx = 0.5f * fw - 0.5f, my = 0.5f * fh - 0.5f;
+    float cx = kpCX / 100.0f * fw - 0.5f, cy = kpCY / 100.0f * fh - 0.5f;
+    float jit = jitK(x, y, TIMELINE_FRAME_INDEX % 4096);
+    float sr = 0.0f, sg = 0.0f, sb = 0.0f, k = 0.0f;
+    if (mode == 0) {
+        float seg = 6.2831853f / _floorf(kpSlices + 0.5f);
+        float lb = _logf(20.0f) / _floorf(kpRings + 0.5f);
+        float ring = kpFlow / 100.0f * t * lb + _logf(0.04f * fh);
+        float r0 = 0.22f * fh, rz = (0.10f + 0.45f * kpZoom / 100.0f) * fh, rot = kpSpin * 0.0174533f * t;
+        float3 s0 = polarSrc(fx - cx, fy - cy, seg, lb, ring, r0, rz, rot, mx, my);
+        int n = clampi((int)(s0.z) + 1, 1, 6);
+        if (n == 1) {
+            float3 c = linL(p_TexR, p_TexG, p_TexB, s0.x, s0.y, W, H);
+            sr = c.x; sg = c.y; sb = c.z;
+        } else {
+            float nf = (float)(n);
+            for (int j = 0; j < 6; j++) {
+                if (j >= n) break;
+                for (int i = 0; i < 6; i++) {
+                    if (i >= n) break;
+                    float ox = ((float)(i) + _fmod(jit + 0.618034f * (float)(j), 1.0f)) / nf - 0.5f;
+                    float oy = ((float)(j) + _fmod(jit * 1.7f + 0.381966f * (float)(i), 1.0f)) / nf - 0.5f;
+                    float3 s = polarSrc(fx + ox - cx, fy + oy - cy, seg, lb, ring, r0, rz, rot, mx, my);
+                    float3 c = linL(p_TexR, p_TexG, p_TexB, s.x, s.y, W, H);
+                    sr += c.x; sg += c.y; sb += c.z;
+                }
+            }
+            sr /= nf * nf; sg /= nf * nf; sb /= nf * nf;
+        }
+    } else {
+        float cs = (0.02f + 0.5f * kpCell / 100.0f) * fh;
+        float u = fx - cx, v = fy - cy;
+        float q = (0.57735027f * u - 0.33333333f * v) / cs, r = (0.66666667f * v) / cs;
+        float c3x = q, c3z = r, c3y = -q - r;
+        float rx = _floorf(c3x + 0.5f), ry = _floorf(c3y + 0.5f), rz = _floorf(c3z + 0.5f);
+        float dxq = _fabs(rx - c3x), dyq = _fabs(ry - c3y), dzq = _fabs(rz - c3z);
+        if (dxq > dyq && dxq > dzq) rx = -ry - rz; else if (dyq > dzq) ry = -rx - rz; else rz = -rx - ry;
+        float ccx = cs * (1.7320508f * rx + 0.8660254f * rz), ccy = cs * 1.5f * rz;
+        float Rl = 0.8660254f * cs * 0.96f;
+        float lu = u - ccx, lv = v - ccy, d = _sqrtf(lu * lu + lv * lv);
+        float cov = sstep(Rl + 0.7f, Rl - 0.7f, d);
+        float3 gp = linL(p_TexR, p_TexG, p_TexB, fx, fy, W, H);
+        float gk = 1.0f - kpGap / 100.0f;
+        float3 lc = make_float3(0.0f, 0.0f, 0.0f);
+        float gl = 0.0f;
+        if (cov > 0.0f) {
+            float view = kpView / 100.0f;
+            float vr = lerp1(Rl, 0.5f * fh, view);
+            float scx = cx + ccx * lerp1(1.0f, 0.35f, view), scy = cy + ccy * lerp1(1.0f, 0.35f, view);
+            float rq = _fminf(d / Rl, 1.0f);
+            float sq = vr / Rl * (0.7f + 0.9f * rq * rq);
+            int n = clampi((int)(sq) + 1, 1, 5);
+            float nf = (float)(n), lr = 0.0f, lg = 0.0f, lbb = 0.0f;
+            for (int j = 0; j < 5; j++) {
+                if (j >= n) break;
+                for (int i = 0; i < 5; i++) {
+                    if (i >= n) break;
+                    float ox = n == 1 ? 0.0f : ((float)(i) + _fmod(jit + 0.618034f * (float)(j), 1.0f)) / nf - 0.5f;
+                    float oy = n == 1 ? 0.0f : ((float)(j) + _fmod(jit * 1.7f + 0.381966f * (float)(i), 1.0f)) / nf - 0.5f;
+                    float qx = (lu + ox) / Rl, qy = (lv + oy) / Rl, qq = qx * qx + qy * qy;
+                    float dm = 0.7f + 0.3f * qq;
+                    float3 c = linL(p_TexR, p_TexG, p_TexB, scx + qx * dm * vr, scy + qy * dm * vr, W, H);
+                    lr += c.x; lg += c.y; lbb += c.z;
+                }
+            }
+            float vig = 1.0f - 0.45f * rq * rq * rq * rq;
+            float gx = lu / Rl + 0.35f, gy = lv / Rl + 0.40f;
+            float ls = luma(lr, lg, lbb) / (nf * nf), ge = (gx * gx + gy * gy) / 0.004f;
+            gl = _expf(-ge * ge) * kpGlint / 100.0f * (0.15f + 0.9f * ls) * 0.8f;
+            lc = make_float3(lr / (nf * nf) * vig + gl, lg / (nf * nf) * vig + gl, lbb / (nf * nf) * vig + gl);
+        }
+        sr = lerp1(gp.x * gk, lc.x, cov); sg = lerp1(gp.y * gk, lc.y, cov); sb = lerp1(gp.z * gk, lc.z, cov);
+        k = gl * cov;
+    }
+    float3 o = lightOut(sr, sg, sb, k);
+    float m = kpMix / 100.0f;
+    return make_float3(lerp1(c0.x, o.x, m), lerp1(c0.y, o.y, m), lerp1(c0.z, o.z, m));
+}

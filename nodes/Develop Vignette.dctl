@@ -1,0 +1,76 @@
+// Develop Vignette: falloff that behaves like light. It is an exposure change in linear light, so
+// bright sources still burn through where a display-space darkening would grey them. Three parts multiply: the
+// natural cos^4 falloff of a lens of the given focal length on a full-frame sensor (21.6 mm half diagonal), an
+// optical falloff toward the rim, and a creative falloff in stops from a midpoint. Highlight Protect holds the
+// brightest pixels back from it, and Shadow Tint lets the darkened corners lean indigo. Rec.709 display in and
+// out. With Focal Length, Optical and Creative at 0 the input comes back untouched. Place it after the look
+// (and after Bloom, so the glow falls off too), before Acutance and grain. MIT License.
+
+DEFINE_UI_PARAMS(lvFocal,    Lens Focal Length,   DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 200.0, 1.0)
+DEFINE_UI_PARAMS(lvOptical,  Optical Falloff,     DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lvCreative, Vignette Stops,      DCTLUI_SLIDER_FLOAT, 0.0, -3.0, 1.0, 0.05)
+DEFINE_UI_PARAMS(lvMid,      Vignette Start,      DCTLUI_SLIDER_FLOAT, 55.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lvRound,    Vignette Roundness,  DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lvProtect,  Highlight Protect,   DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lvTint,     Vignette Shadow Tint, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Lens Focal Length, "0 is off; the natural falloff of a lens this long on full frame (35 is about -0.9 stop in the corner)")
+DEFINE_UI_TOOLTIP(Optical Falloff, "Extra falloff near the rim, like a lens hood or a fast lens wide open")
+DEFINE_UI_TOOLTIP(Vignette Stops, "Creative falloff in stops, reached just past the corners; negative darkens")
+DEFINE_UI_TOOLTIP(Vignette Start, "Where the creative falloff begins, from the centre (0) to the corner (100)")
+DEFINE_UI_TOOLTIP(Vignette Roundness, "100 is a circle; 0 follows the frame's shape")
+DEFINE_UI_TOOLTIP(Highlight Protect, "Bright light keeps more of its level in the corners")
+DEFINE_UI_TOOLTIP(Vignette Shadow Tint, "The darkened corners lean indigo")
+
+__DEVICE__ float smooth01(float a, float b, float x)
+{
+    float t = _saturatef((x - a) / (b - a));
+    return t * t * (3.0f - 2.0f * t);
+}
+
+__DEVICE__ float toLin(float x) { return x < 0.0f ? -_powf(-x, 2.4f) : _powf(x, 2.4f); }
+__DEVICE__ float toDisp(float x) { return x < 0.0f ? -_powf(-x, 1.0f / 2.4f) : _powf(x, 1.0f / 2.4f); }
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float r = _tex2D(p_TexR, p_X, p_Y), g = _tex2D(p_TexG, p_X, p_Y), b = _tex2D(p_TexB, p_X, p_Y);
+    if (lvFocal <= 0.0f && lvOptical <= 0.0f && lvCreative == 0.0f)
+    {
+        return make_float3(r, g, b);
+    }
+    float hw = 0.5f * (float)(p_Width), hh = 0.5f * (float)(p_Height);
+    float dx = (float)(p_X) + 0.5f - hw, dy = (float)(p_Y) + 0.5f - hh;
+    float rc = _sqrtf(dx * dx + dy * dy) / _sqrtf(hw * hw + hh * hh);
+    float re = _sqrtf(0.5f * ((dx / hw) * (dx / hw) + (dy / hh) * (dy / hh)));
+    float rr = re + (rc - re) * lvRound / 100.0f;
+    float gn = 1.0f;
+    if (lvFocal > 0.0f)
+    {
+        float t = rc * 21.6f / lvFocal;
+        float c2 = 1.0f / (1.0f + t * t);
+        gn *= c2 * c2;
+    }
+    if (lvOptical > 0.0f)
+    {
+        gn *= 1.0f - lvOptical / 100.0f * _powf(smooth01(0.55f, 1.15f, rc), 1.5f);
+    }
+    if (lvCreative != 0.0f)
+    {
+        gn *= _exp2f(lvCreative * smooth01(lvMid / 100.0f, 1.2f, rr));
+    }
+    float lr = toLin(r), lg = toLin(g), lb = toLin(b);
+    float y = 0.2126f * lr + 0.7152f * lg + 0.0722f * lb;
+    float k = gn + (1.0f - gn) * lvProtect / 100.0f * smooth01(0.25f, 1.0f, y);
+    lr *= k; lg *= k; lb *= k;
+    if (lvTint > 0.0f && k < 1.0f)
+    {
+        float w = lvTint / 100.0f * (1.0f - k) * (1.0f - smooth01(0.0f, 0.2f, y));
+        float yk = 0.2126f * lr + 0.7152f * lg + 0.0722f * lb;
+        float ir = 1.00598f * yk, ig = 0.91453f * yk, ib = 1.82907f * yk;
+        lr += (ir - lr) * w; lg += (ig - lg) * w; lb += (ib - lb) * w;
+    }
+    lr = _clampf(toDisp(lr), _fminf(r, 0.0f), _fmaxf(r, 1.0f));
+    lg = _clampf(toDisp(lg), _fminf(g, 0.0f), _fmaxf(g, 1.0f));
+    lb = _clampf(toDisp(lb), _fminf(b, 0.0f), _fmaxf(b, 1.0f));
+    return make_float3(lr, lg, lb);
+}

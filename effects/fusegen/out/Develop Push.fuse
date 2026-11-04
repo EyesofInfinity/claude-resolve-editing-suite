@@ -1,0 +1,981 @@
+--[[ Develop Push as a Fusion Fuse: the transition DCTL effects/move/build/Develop Push.dctl run on the GPU through DVIPComputeNode,
+every pixel calling the DCTL's own main function with the DCTL's own controls. Written by
+effects/fusegen/fusegen.py; regenerate it, never edit it. The picture is read and written in the values
+the DCTL sees in Resolve (Rec.709 gamma 2.4 display values in Develop), with no conversion.
+Outgoing and Incoming are the two shots; animate Progress from 0 to 1 over the overlap.
+Frame Offset adds to the comp frame for the DCTL's frame value; Hold Frame uses Frame Offset alone.
+If the kernel cannot run, the output is solid magenta and the reason is in the Fusion console, in the
+tool's data DevelopFuse.Status and in %TEMP%\DevelopFuse.log. MIT License. ]]
+
+FuRegisterClass("DevelopPush", CT_Tool, {
+	REGS_Category = "Fuses\\Develop",
+	REGS_OpIconString = "DP",
+	REGS_OpDescription = "Develop Push (Develop DCTL in a Fuse)",
+	REG_NoObjMatCtrls = true,
+	REG_NoMotionBlurCtrls = true,
+	})
+
+DvName = "Develop Push"
+DvKind = "transition"
+DvDctl = "move/build/Develop Push.dctl"
+
+-- the DCTL slider steps, for the record and the inverse mapping (Fusion sliders have no step)
+DvSteps = { puStyle = 1.0, puAngle = 1.0, puTravel = 1.0, puBlur = 1.0, puGlow = 1.0, puEdge = 1.0, puBeats = 1.0, puSeed = 1.0 }
+
+-- this Fuse's own C names for its kernels and parameter structs (never shared with another Fuse)
+DvKernelName = "DevelopPushK947973c1"
+DvParamsName = "DevelopPushP947973c1"
+DvSplitName = "DevelopPushS947973c1"
+DvSplitParamsName = "DevelopPushSP947973c1"
+
+DvParams = [[
+	float puStyle;
+	float puAngle;
+	float puTravel;
+	float puBlur;
+	float puGlow;
+	float puEdge;
+	float puBeats;
+	float puSeed;
+	float dvProgress;
+	int dvFrame;
+	int dvFlipY;
+	int dvSize[2];
+]]
+
+DvSplitParams = [[
+	int ch;
+	int flipY;
+	int size[2];
+]]
+
+DvSplitSource = [[
+// one channel of an image as its own texture (the channel in every component), rows turned top-down when
+// flipY is set, so a DCTL's _tex2D(plane, x, y) reads what Resolve hands it
+__KERNEL__ void DevelopPushS947973c1(__CONSTANTREF__ DevelopPushSP947973c1 *params, __TEXTURE2D__ src, __TEXTURE2D_WRITE__ dst)
+{
+    DEFINE_KERNEL_ITERATORS_XY(x, y)
+    if (x < params->size[0] && y < params->size[1])
+    {
+        int sy = params->flipY != 0 ? params->size[1] - 1 - y : y;
+        float4 c = _tex2DVec4(src, x, sy);
+        float v = params->ch == 0 ? c.x : (params->ch == 1 ? c.y : (params->ch == 2 ? c.z : c.w));
+        _tex2DVec4Write(dst, x, y, to_float4(v, v, v, v));
+    }
+}
+]]
+
+DvMath = [[
+// fusegen dctl math (README section 2): the argument casts Resolve gives a DCTL on OpenCL and Metal
+#if !defined(KERNEL_TYPE_IS_DCTL) && defined(DEVICE_IS_OPENCL)
+#undef _fabs
+#define _fabs(_A) fabs((float)(_A))
+#undef _powf
+#define _powf(_A, _B) native_powr((float)(_A), (float)(_B))
+#undef _logf
+#define _logf(_A) native_log((float)(_A))
+#undef _log2f
+#define _log2f(_A) native_log2((float)(_A))
+#undef _log10f
+#define _log10f(_A) native_log10((float)(_A))
+#undef _expf
+#define _expf(_A) native_exp((float)(_A))
+#undef _exp2f
+#define _exp2f(_A) native_exp2((float)(_A))
+#undef _exp10f
+#define _exp10f(_A) native_exp10((float)(_A))
+#undef _copysignf
+#define _copysignf(_A, _B) copysign((float)(_A), (float)(_B))
+#undef _fmaxf
+#define _fmaxf(_A, _B) fmax((float)(_A), (float)(_B))
+#undef _fminf
+#define _fminf(_A, _B) fmin((float)(_A), (float)(_B))
+#undef _clampf
+#define _clampf(_A, _B, _C) clamp((float)(_A), (float)(_B), (float)(_C))
+#undef _sqrtf
+#define _sqrtf(_A) native_sqrt((float)(_A))
+#undef _ceilf
+#define _ceilf(_A) ceil((float)(_A))
+#undef _floorf
+#define _floorf(_A) floor((float)(_A))
+#undef _fmod
+#define _fmod(_A, _B) fmod((float)(_A), (float)(_B))
+#undef _round
+#define _round(_A) round((float)(_A))
+#undef _atan2f
+#define _atan2f(_A, _B) atan2((float)(_A), (float)(_B))
+#undef _sinf
+#define _sinf(_A) native_sin((float)(_A))
+#undef _cosf
+#define _cosf(_A) native_cos((float)(_A))
+#undef _tanf
+#define _tanf(_A) native_tan((float)(_A))
+#undef _acosf
+#define _acosf(_A) acos((float)(_A))
+#undef _asinf
+#define _asinf(_A) asin((float)(_A))
+#undef _sinpif
+#define _sinpif(_A) sinpi((float)(_A))
+#undef _cospif
+#define _cospif(_A) cospi((float)(_A))
+#undef _acoshf
+#define _acoshf(_A) acosh((float)(_A))
+#undef _asinhf
+#define _asinhf(_A) asinh((float)(_A))
+#undef _atanhf
+#define _atanhf(_A) atanh((float)(_A))
+#undef _coshf
+#define _coshf(_A) cosh((float)(_A))
+#undef _sinhf
+#define _sinhf(_A) sinh((float)(_A))
+#undef _tanhf
+#define _tanhf(_A) tanh((float)(_A))
+#undef _truncf
+#define _truncf(_A) trunc((float)(_A))
+#undef _fdimf
+#define _fdimf(_A, _B) fdim((float)(_A), (float)(_B))
+#undef _fmaf
+#define _fmaf(_A, _B, _C) fma((float)(_A), (float)(_B), (float)(_C))
+#undef _rsqrtf
+#define _rsqrtf(_A) rsqrt((float)(_A))
+#undef _saturatef
+#define _saturatef(_A) clamp((float)(_A), 0.0f, 1.0f)
+#undef _hypotf
+#define _hypotf(_A, _B) hypot((float)(_A), (float)(_B))
+#elif !defined(KERNEL_TYPE_IS_DCTL) && defined(DEVICE_IS_METAL)
+#undef _fabs
+#define _fabs(_A) fabs((float)(_A))
+#undef _powf
+#define _powf(_A, _B) pow((float)(_A), (float)(_B))
+#undef _logf
+#define _logf(_A) log((float)(_A))
+#undef _log2f
+#define _log2f(_A) log2((float)(_A))
+#undef _log10f
+#define _log10f(_A) log10((float)(_A))
+#undef _expf
+#define _expf(_A) exp((float)(_A))
+#undef _exp2f
+#define _exp2f(_A) exp2((float)(_A))
+#undef _exp10f
+#define _exp10f(_A) exp10((float)(_A))
+#undef _copysignf
+#define _copysignf(_A, _B) copysign((float)(_A), (float)(_B))
+#undef _fmaxf
+#define _fmaxf(_A, _B) fmax((float)(_A), (float)(_B))
+#undef _fminf
+#define _fminf(_A, _B) fmin((float)(_A), (float)(_B))
+#undef _clampf
+#define _clampf(_A, _B, _C) clamp((float)(_A), (float)(_B), (float)(_C))
+#undef _sqrtf
+#define _sqrtf(_A) sqrt((float)(_A))
+#undef _ceilf
+#define _ceilf(_A) ceil((float)(_A))
+#undef _floorf
+#define _floorf(_A) floor((float)(_A))
+#undef _fmod
+#define _fmod(_A, _B) fmod((float)(_A), (float)(_B))
+#undef _round
+#define _round(_A) round((float)(_A))
+#undef _atan2f
+#define _atan2f(_A, _B) atan2((float)(_A), (float)(_B))
+#undef _sinf
+#define _sinf(_A) sin((float)(_A))
+#undef _cosf
+#define _cosf(_A) cos((float)(_A))
+#undef _tanf
+#define _tanf(_A) tan((float)(_A))
+#undef _acosf
+#define _acosf(_A) acos((float)(_A))
+#undef _asinf
+#define _asinf(_A) asin((float)(_A))
+#undef _sinpif
+#define _sinpif(_A) sinpi((float)(_A))
+#undef _cospif
+#define _cospif(_A) cospi((float)(_A))
+#undef _acoshf
+#define _acoshf(_A) acosh((float)(_A))
+#undef _asinhf
+#define _asinhf(_A) asinh((float)(_A))
+#undef _atanhf
+#define _atanhf(_A) atanh((float)(_A))
+#undef _coshf
+#define _coshf(_A) cosh((float)(_A))
+#undef _sinhf
+#define _sinhf(_A) sinh((float)(_A))
+#undef _tanhf
+#define _tanhf(_A) tanh((float)(_A))
+#undef _truncf
+#define _truncf(_A) trunc((float)(_A))
+#undef _fdimf
+#define _fdimf(_A, _B) fdim((float)(_A), (float)(_B))
+#undef _fmaf
+#define _fmaf(_A, _B, _C) fma((float)(_A), (float)(_B), (float)(_C))
+#undef _rsqrtf
+#define _rsqrtf(_A) rsqrt((float)(_A))
+#undef _saturatef
+#define _saturatef(_A) saturate((float)(_A))
+#undef _hypotf
+#define _hypotf(_A, _B) sqrt((float)(_A) * (float)(_A) + (float)(_B) * (float)(_B))
+#endif
+]]
+
+DvMapping = [[
+// fusegen mapping (effects/fusegen/README.md section 2): a DCTL reads one channel with _tex2D(plane, x, y);
+// here each plane is a texture holding that channel, read at whole-pixel coordinates by the default sampler
+#define dvTex2D(dv_t, dv_x, dv_y) (_tex2DVec4((dv_t), (dv_x), (dv_y)).x)
+]]
+
+DvCompat = [[
+// fusegen compatibility, used only when the plain source does not build: Resolve's DCTL names for the vector
+// constructors, over Fusion's own
+#ifndef make_float2
+#define make_float2(a, b) to_float2((a), (b))
+#endif
+#ifndef make_float3
+#define make_float3(a, b, c) to_float3((a), (b), (c))
+#endif
+#ifndef make_float4
+#define make_float4(a, b, c, d) to_float4((a), (b), (c), (d))
+#endif
+]]
+
+DvKernelText = [[
+// Develop Push: whip, push and cut transitions in one Transition DCTL. Five styles:
+//   0 Swish: a whip (7 to 9 frames of motion blur bridging both shots). The
+//     outgoing shot speeds off along Angle, the cut lands on the blurriest frame, the incoming shot slows in from the
+//     other side; the blur follows the speed and the light in it glows.
+//   1 Film Whip: the two shots one after the other on a strip of film pulled through the gate, a dark frame line
+//     between them with a red edge where light leaks onto the film's edge, all of it motion blurred.
+//   2 Hyper Push: a push into the outgoing shot with radial blur, the incoming shot arriving from the same push.
+//   3 Hyper Pull: the same pulled back, the frame's mirrored edges filling as it shrinks.
+//   4 Flutter Cut: the two shots stuttering against each other on beats, jolted and flashed, the incoming taking over.
+// Every style starts exactly on the outgoing shot and ends exactly on the incoming one. Sampling is bilinear with
+// mirrored edges; light is blurred and glowed in linear (Rec.709 gamma 2.4). Lay Swish 7 to 9 frames, the zooms
+// 10 to 16. MIT License.
+
+// fusegen ui: puStyle
+// fusegen ui: puAngle
+// fusegen ui: puTravel
+// fusegen ui: puBlur
+// fusegen ui: puGlow
+// fusegen ui: puEdge
+// fusegen ui: puBeats
+// fusegen ui: puSeed
+
+// fusegen tip: Style
+// fusegen tip: Angle
+// fusegen tip: Film Edge
+// fusegen tip: Beats
+
+// Develop light: the shared code of Develop Leak, Develop Burn and Develop Light Dissolve.
+// build.py writes it into each effect, so every installed .dctl stands alone. Rec.709 gamma 2.4 in and out;
+// light is added in linear. Coordinates are in frame heights (y 0 to 1 top to bottom, x 0 to width/height),
+// so a leak keeps its shape at any resolution and aspect. MIT License.
+
+__DEVICE__ float toLin(float x) { return _powf(_fmaxf(x, 0.0f), 2.4f); }
+__DEVICE__ float toDisp(float x) { return _powf(_fmaxf(x, 0.0f), 1.0f / 2.4f); }
+__DEVICE__ float luma(float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; }
+__DEVICE__ float lerp1(float a, float b, float t) { return a + (b - a) * t; }
+__DEVICE__ float sstep(float a, float b, float x) { float t = _saturatef((x - a) / (b - a)); return t * t * (3.0f - 2.0f * t); }
+
+__DEVICE__ float3 shoulder(float r, float g, float b)
+{
+    float m = _fmaxf(r, _fmaxf(g, b));
+    if (m <= 0.8f) return make_float3(r, g, b);
+    float nm = 0.8f + 0.2f * _tanhf((m - 0.8f) / 0.2f);
+    float k = nm / m, w = 0.6f * sstep(1.0f, 3.0f, m);
+    return make_float3(lerp1(r * k, nm, w), lerp1(g * k, nm, w), lerp1(b * k, nm, w));
+}
+
+__DEVICE__ float3 lightOut(float r, float g, float b, float k)
+{
+    float3 s = shoulder(r, g, b);
+    float w = _saturatef(k * 4.0f);
+    return make_float3(_saturatef(toDisp(lerp1(r, s.x, w))), _saturatef(toDisp(lerp1(g, s.y, w))), _saturatef(toDisp(lerp1(b, s.z, w))));
+}
+
+__DEVICE__ float hash01(uint x, uint y, uint z)
+{
+    x = x * 1664525u + 1013904223u; y = y * 1664525u + 1013904223u; z = z * 1664525u + 1013904223u;
+    x += y * z; y += z * x; z += x * y;
+    x ^= x >> 16u; y ^= y >> 16u; z ^= z >> 16u;
+    x += y * z; y += z * x; z += x * y;
+    return (float)(x >> 8u) * (1.0f / 16777216.0f);
+}
+
+__DEVICE__ float fade(float t) { return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f); }
+
+__DEVICE__ float vnoise3(float x, float y, float z, uint s)
+{
+    int ix = (int)(x), iy = (int)(y), iz = (int)(z);
+    float tx = fade(x - (float)(ix)), ty = fade(y - (float)(iy)), tz = fade(z - (float)(iz));
+    uint x0 = (uint)(ix), y0 = (uint)(iy), z0 = (uint)(iz) + s * 7919u;
+    float a0 = lerp1(lerp1(hash01(x0, y0, z0), hash01(x0 + 1u, y0, z0), tx), lerp1(hash01(x0, y0 + 1u, z0), hash01(x0 + 1u, y0 + 1u, z0), tx), ty);
+    float a1 = lerp1(lerp1(hash01(x0, y0, z0 + 1u), hash01(x0 + 1u, y0, z0 + 1u), tx), lerp1(hash01(x0, y0 + 1u, z0 + 1u), hash01(x0 + 1u, y0 + 1u, z0 + 1u), tx), ty);
+    return lerp1(a0, a1, tz);
+}
+
+__DEVICE__ float fbm(float x, float y, float z, int n, uint s)
+{
+    float sum = 0.0f, amp = 0.5f, tot = 0.0f, f = 1.0f;
+    for (int i = 0; i < 5; i++) {
+        if (i >= n) break;
+        sum += amp * vnoise3(x * f + 4096.0f + 37.1f * (float)(i), y * f + 4096.0f + 11.7f * (float)(i), z * f + 4096.0f, s + (uint)(i));
+        tot += amp; amp *= 0.5f; f *= 2.03f;
+    }
+    float v = sum / tot;
+    return _saturatef((v - 0.5f) * 1.6f + 0.5f);
+}
+
+__DEVICE__ float3 ramp(float pal, float t, float age)
+{
+    int p = (int)(pal + 0.5f);
+    float c0r = 0.30f, c0g = 0.10f, c0b = 0.42f, c1r = 0.62f, c1g = 0.35f, c1b = 0.47f, c2r = 0.86f, c2g = 0.76f, c2b = 0.68f;
+    float h0r = 0.73f, h0g = 0.16f, h0b = 0.26f, h1r = 0.89f, h1g = 0.35f, h1b = 0.17f, h2r = 0.94f, h2g = 0.50f, h2b = 0.22f;
+    if (p == 1) {
+        c0r = 0.45f; c0g = 0.08f; c0b = 0.05f; c1r = 0.85f; c1g = 0.30f; c1b = 0.08f; c2r = 0.98f; c2g = 0.70f; c2b = 0.35f;
+        h0r = 0.80f; h0g = 0.20f; h0b = 0.04f; h1r = 0.98f; h1g = 0.55f; h1b = 0.12f; h2r = 1.00f; h2g = 0.85f; h2b = 0.55f;
+    }
+    if (p == 2) {
+        c0r = 0.18f; c0g = 0.10f; c0b = 0.45f; c1r = 0.65f; c1g = 0.25f; c1b = 0.65f; c2r = 0.95f; c2g = 0.70f; c2b = 0.75f;
+        h0r = 0.70f; h0g = 0.15f; h0b = 0.50f; h1r = 0.95f; h1g = 0.45f; h1b = 0.45f; h2r = 1.00f; h2g = 0.75f; h2b = 0.55f;
+    }
+    if (p == 3) {
+        c0r = 0.05f; c0g = 0.10f; c0b = 0.35f; c1r = 0.15f; c1g = 0.40f; c1b = 0.75f; c2r = 0.70f; c2g = 0.85f; c2b = 0.98f;
+        h0r = 0.10f; h0g = 0.25f; h0b = 0.60f; h1r = 0.35f; h1g = 0.65f; h1b = 0.95f; h2r = 0.85f; h2g = 0.95f; h2b = 1.00f;
+    }
+    float a = _saturatef(age);
+    float r0 = lerp1(c0r, h0r, a), g0 = lerp1(c0g, h0g, a), b0 = lerp1(c0b, h0b, a);
+    float r1 = lerp1(c1r, h1r, a), g1 = lerp1(c1g, h1g, a), b1 = lerp1(c1b, h1b, a);
+    float r2 = lerp1(c2r, h2r, a), g2 = lerp1(c2g, h2g, a), b2 = lerp1(c2b, h2b, a);
+    float u = _saturatef(t);
+    float r, g, b;
+    if (u < 0.5f) { float k = u * 2.0f; r = lerp1(r0, r1, k); g = lerp1(g0, g1, k); b = lerp1(b0, b1, k); }
+    else { float k = u * 2.0f - 1.0f; r = lerp1(r1, r2, k); g = lerp1(g1, g2, k); b = lerp1(b1, b2, k); }
+    float hot = sstep(1.0f, 1.4f, t);
+    return make_float3(toLin(lerp1(r, 1.0f, hot)), toLin(lerp1(g, 0.96f, hot)), toLin(lerp1(b, 0.90f, hot)));
+}
+
+__DEVICE__ float leakField(float x, float y, float aspect, float deg, float w, float sc, float z, uint s)
+{
+    float a = deg * 0.0174533f, ca = _cosf(a), sa = _sinf(a);
+    float ext = 0.5f * (_fabs(ca) * aspect + _fabs(sa));
+    float sproj = (x - 0.5f * aspect) * ca + (y - 0.5f) * sa;
+    float warp = fbm(x * 1.3f, y * 1.3f, z * 0.35f, 2, s + 40u) - 0.5f;
+    float d = _fmaxf(ext - sproj + 0.45f * warp * w * aspect, 0.0f);
+    float reach = _fmaxf(w * aspect, 0.02f);
+    float e = _expf(-(d / reach) * (d / reach));
+    float cloud = fbm(x / sc, y / sc, z, 3, s);
+    return _saturatef(e * (0.35f + 1.3f * cloud));
+}
+
+__DEVICE__ float burnHeat(float x, float y, float cover, float sc, float z, uint s)
+{
+    float wx = fbm(x / sc * 0.7f, y / sc * 0.7f, z * 0.6f, 2, s + 90u) - 0.5f;
+    float wy = fbm(x / sc * 0.7f + 31.0f, y / sc * 0.7f, z * 0.6f, 2, s + 91u) - 0.5f;
+    float h = fbm((x + 0.6f * wx) / sc, (y + 0.6f * wy) / sc, z, 4, s);
+    float th = 1.0f - cover;
+    return _saturatef((h - th + 0.28f) / 0.62f);
+}
+
+__DEVICE__ float dust(int px, int py, int h, float amount, uint z)
+{
+    float sc = (float)(h) / 1080.0f;
+    int cx = (int)((float)(px) / (2.5f * sc)), cy = (int)((float)(py) / (2.5f * sc));
+    float r = hash01((uint)(cx), (uint)(cy), z * 13u + 5u);
+    float lim = 0.00002f * amount;
+    if (r > lim) return 0.0f;
+    return hash01((uint)(cx), (uint)(cy), z * 13u + 6u) < 0.6f ? -1.0f : 1.0f;
+}
+
+__DEVICE__ float4 burnOver(float r, float g, float b, float x, float y, float aspect, int px, int py, int ph,
+                           float cover, float pal, float age, float sc, float show, float grain, float dst,
+                           float z, uint fz, uint s)
+{
+    float k = sstep(0.0f, 0.35f, burnHeat(x, y, cover, sc, z, s));
+    uint zi = (uint)(z + 1000.0f);
+    float ang = 6.2831853f * ((float)(zi % 1000u) * 0.37f + 0.25f * hash01(zi, s, 71u));
+    float ca = _cosf(ang), sa = _sinf(ang), ext = 0.5f * (_fabs(ca) * aspect + _fabs(sa));
+    float band = 0.5f + 0.5f * ((x - 0.5f * aspect) * ca + (y - 0.5f) * sa) / ext;
+    float cl = fbm(x / (sc * 1.6f), y / (sc * 1.6f), z, 3, s + 200u);
+    float t = 0.05f + 0.95f * _saturatef(0.8f * band + 0.95f * (cl - 0.5f) + 0.15f);
+    float3 c = ramp(pal, t, age);
+    float keep = lerp1(1.0f, show, k);
+    float gr = 1.0f + grain * 0.22f * (hash01((uint)(px), (uint)(py), fz * 3u + s) - 0.5f) * k;
+    float d = dust(px, py, ph, dst * 100.0f, fz + s) * k;
+    float rr = (r * keep + c.x * k) * gr, gg = (g * keep + c.y * k) * gr, bb = (b * keep + c.z * k) * gr;
+    if (d < 0.0f) { rr *= 0.15f; gg *= 0.12f; bb *= 0.12f; }
+    if (d > 0.0f) { rr = rr + 0.6f; gg = gg + 0.55f; bb = bb + 0.45f; }
+    return make_float4(rr, gg, bb, k);
+}
+// Develop glitch: shared code of the glitch effects, on top of light.h's hash and helpers. MIT License.
+
+__DEVICE__ int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+__DEVICE__ float3 rgbAt(__TEXTURE2D__ tr, __TEXTURE2D__ tg, __TEXTURE2D__ tb, int x, int y, int w, int h)
+{
+    int cx = clampi(x, 0, w - 1), cy = clampi(y, 0, h - 1);
+    return make_float3(dvTex2D(tr, cx, cy), dvTex2D(tg, cx, cy), dvTex2D(tb, cx, cy));
+}
+
+__DEVICE__ float lumaAt(__TEXTURE2D__ tr, __TEXTURE2D__ tg, __TEXTURE2D__ tb, int x, int y, int w, int h)
+{
+    float3 c = rgbAt(tr, tg, tb, x, y, w, h);
+    return luma(c.x, c.y, c.z);
+}
+
+__DEVICE__ float rnd3(int a, int b, uint c) { return hash01((uint)(a + 65536), (uint)(b + 65536), c); }
+
+__DEVICE__ float bayer8(int cx, int cy)
+{
+    int bx = cx & 7, by = cy & 7, xr = bx ^ by;
+    int v = ((xr & 1) << 5) | ((by & 1) << 4) | ((xr & 2) << 2) | ((by & 2) << 1) | ((xr & 4) >> 1) | ((by & 4) >> 2);
+    return ((float)(v) + 0.5f) / 64.0f;
+}
+
+__DEVICE__ float3 gritFinish(float3 c, int x, int y, int h, float g, float grit, float dith, uint seed)
+{
+    if (g <= 0.0f) return c;
+    float L = luma(c.x, c.y, c.z);
+    float n = hash01((uint)(x + 65536), (uint)(y + 65536), seed) - 0.5f;
+    float gr = grit * g * 0.16f * (0.35f + 0.65f * L) * n;
+    float r = c.x + gr, gg = c.y + gr, b = c.z + gr;
+    float d = dith * g;
+    if (d > 0.0f) {
+        int cell = (int)(2.0f * (float)(h) / 1080.0f + 0.5f);
+        if (cell < 1) cell = 1;
+        float t = bayer8((int)(x / cell), (int)(y / cell));
+        float lv = 32.0f * (1.0f - d) + 3.0f * d - 1.0f;
+        r = _floorf(_saturatef(r) * lv + t) / lv; gg = _floorf(_saturatef(gg) * lv + t) / lv; b = _floorf(_saturatef(b) * lv + t) / lv;
+    }
+    return make_float3(_saturatef(r), _saturatef(gg), _saturatef(b));
+}
+
+__DEVICE__ float3 chromaBleed(__TEXTURE2D__ tr, __TEXTURE2D__ tg, __TEXTURE2D__ tb, float3 c, int x, int y, int w, int h, int k)
+{
+    if (k < 1) return c;
+    float3 a = rgbAt(tr, tg, tb, x - k, y, w, h), b = rgbAt(tr, tg, tb, x - (int)(k / 2), y, w, h);
+    float3 m = make_float3((a.x + b.x + c.x) / 3.0f, (a.y + b.y + c.y) / 3.0f, (a.z + b.z + c.z) / 3.0f);
+    float L = luma(c.x, c.y, c.z), Lm = luma(m.x, m.y, m.z);
+    return make_float3(m.x - Lm + L, m.y - Lm + L, m.z - Lm + L);
+}
+
+__DEVICE__ int mirrorI(int i, int n)
+{
+    int q = 2 * n, m = i % q;
+    if (m < 0) m += q;
+    if (m >= n) m = q - 1 - m;
+    return clampi(m, 0, n - 1);
+}
+
+__DEVICE__ float3 bil(__TEXTURE2D__ tr, __TEXTURE2D__ tg, __TEXTURE2D__ tb, float fx, float fy, int w, int h)
+{
+    float bx = _floorf(fx), by = _floorf(fy);
+    float ax = fx - bx, ay = fy - by;
+    int x0 = (int)(bx), y0 = (int)(by);
+    int xa = mirrorI(x0, w), xb = mirrorI(x0 + 1, w), ya = mirrorI(y0, h), yb = mirrorI(y0 + 1, h);
+    float3 c00 = make_float3(dvTex2D(tr, xa, ya), dvTex2D(tg, xa, ya), dvTex2D(tb, xa, ya));
+    if (ax == 0.0f && ay == 0.0f) return c00;
+    float3 c10 = make_float3(dvTex2D(tr, xb, ya), dvTex2D(tg, xb, ya), dvTex2D(tb, xb, ya));
+    float3 c01 = make_float3(dvTex2D(tr, xa, yb), dvTex2D(tg, xa, yb), dvTex2D(tb, xa, yb));
+    float3 c11 = make_float3(dvTex2D(tr, xb, yb), dvTex2D(tg, xb, yb), dvTex2D(tb, xb, yb));
+    float r = lerp1(lerp1(c00.x, c10.x, ax), lerp1(c01.x, c11.x, ax), ay);
+    float g = lerp1(lerp1(c00.y, c10.y, ax), lerp1(c01.y, c11.y, ax), ay);
+    float b = lerp1(lerp1(c00.z, c10.z, ax), lerp1(c01.z, c11.z, ax), ay);
+    return make_float3(r, g, b);
+}
+
+__DEVICE__ float3 lineBlur(__TEXTURE2D__ tr, __TEXTURE2D__ tg, __TEXTURE2D__ tb, float fx, float fy, float dx, float dy, float len, int w, int h)
+{
+    if (len < 0.5f) {
+        float3 c = bil(tr, tg, tb, fx, fy, w, h);
+        return make_float3(toLin(c.x), toLin(c.y), toLin(c.z));
+    }
+    float r = 0.0f, g = 0.0f, b = 0.0f;
+    for (int i = 0; i < 24; i++) {
+        float t = ((float)(i) + 0.5f) / 24.0f - 0.5f;
+        float3 c = bil(tr, tg, tb, fx + dx * t * len, fy + dy * t * len, w, h);
+        r += toLin(c.x); g += toLin(c.y); b += toLin(c.z);
+    }
+    return make_float3(r / 24.0f, g / 24.0f, b / 24.0f);
+}
+
+__DEVICE__ float3 zoomBlur(__TEXTURE2D__ tr, __TEXTURE2D__ tg, __TEXTURE2D__ tb, float x, float y, float s, float k, int w, int h)
+{
+    float cx = 0.5f * (float)(w) - 0.5f, cy = 0.5f * (float)(h) - 0.5f;
+    float ux = (x - cx) / s, uy = (y - cy) / s;
+    if (k < 0.002f) {
+        float3 c = bil(tr, tg, tb, cx + ux, cy + uy, w, h);
+        return make_float3(toLin(c.x), toLin(c.y), toLin(c.z));
+    }
+    float r = 0.0f, g = 0.0f, b = 0.0f;
+    for (int i = 0; i < 24; i++) {
+        float f = 1.0f - k * ((float)(i) + 0.5f) / 24.0f;
+        float3 c = bil(tr, tg, tb, cx + ux * f, cy + uy * f, w, h);
+        r += toLin(c.x); g += toLin(c.y); b += toLin(c.z);
+    }
+    return make_float3(r / 24.0f, g / 24.0f, b / 24.0f);
+}
+
+__DEVICE__ float3 glowed(float3 l, float w, float glow)
+{
+    float k = glow * w;
+    if (k <= 0.0f) return l;
+    float L = luma(l.x, l.y, l.z), hot = _fmaxf(L - 0.25f, 0.0f) * 1.8f * k;
+    float lift = 0.12f * k * w * w;
+    return make_float3(l.x * (1.0f + hot) + lift, l.y * (1.0f + hot) + lift, l.z * (1.0f + hot) + lift * 0.95f);
+}
+
+__DEVICE__ float4 dvMain(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE2D__ p_FromTexR, __TEXTURE2D__ p_FromTexG, __TEXTURE2D__ p_FromTexB, __TEXTURE2D__ p_FromTexA, __TEXTURE2D__ p_ToTexR, __TEXTURE2D__ p_ToTexG, __TEXTURE2D__ p_ToTexB, __TEXTURE2D__ p_ToTexA, int dvFrame, float dvProgress, float puStyle, float puAngle, float puTravel, float puBlur, float puGlow, float puEdge, float puBeats, float puSeed)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float p = _saturatef(dvProgress);
+    int st = (int)(puStyle + 0.5f);
+    float fx = (float)(x), fy = (float)(y);
+    float an = puAngle * 0.0174533f, dx = _cosf(an), dy = _sinf(an);
+    float bell = _sinf(3.1415927f * p);
+    bell = bell * bell;
+    float glow = puGlow / 100.0f;
+    if (p <= 0.0f) { float3 a = rgbAt(p_FromTexR, p_FromTexG, p_FromTexB, x, y, W, H); return make_float4(a.x, a.y, a.z, 1.0f); }
+    if (p >= 1.0f) { float3 b = rgbAt(p_ToTexR, p_ToTexG, p_ToTexB, x, y, W, H); return make_float4(b.x, b.y, b.z, 1.0f); }
+    float3 l = make_float3(0.0f, 0.0f, 0.0f);
+    float k = 0.0f;
+    if (st == 0) {
+        float D = (0.15f + 1.35f * puTravel / 100.0f) * (float)(W);
+        float len = puBlur / 100.0f * 0.45f * (float)(W) * bell;
+        if (p < 0.5f) {
+            float u = p * 2.0f, o = D * u * u * u;
+            l = lineBlur(p_FromTexR, p_FromTexG, p_FromTexB, fx - dx * o, fy - dy * o, dx, dy, len, W, H);
+        } else {
+            float v = 2.0f - p * 2.0f, o = D * v * v * v;
+            l = lineBlur(p_ToTexR, p_ToTexG, p_ToTexB, fx + dx * o, fy + dy * o, dx, dy, len, W, H);
+        }
+        l = glowed(l, bell, glow);
+        k = bell;
+    } else if (st == 1) {
+        float ext = _fabs(dx) * (float)(W) + _fabs(dy) * (float)(H);
+        float gap = 0.12f * (float)(H), pitch = ext + gap;
+        float e = p * p * (3.0f - 2.0f * p), o = pitch * e;
+        float len = puBlur / 100.0f * 0.30f * ext * bell * 1.5f;
+        float cx = 0.5f * (float)(W), cy = 0.5f * (float)(H);
+        float sA = (fx - cx) * dx + (fy - cy) * dy - o;
+        float r = 0.0f, g = 0.0f, b = 0.0f;
+        int n = len < 0.5f ? 1 : 16;
+        for (int i = 0; i < 16; i++) {
+            if (i >= n) break;
+            float t = n == 1 ? 0.0f : (((float)(i) + 0.5f) / 16.0f - 0.5f) * len;
+            float s = sA + t;
+            float3 c;
+            if (s > -0.5f * ext) {
+                c = bil(p_FromTexR, p_FromTexG, p_FromTexB, fx - dx * o + dx * t, fy - dy * o + dy * t, W, H);
+            } else if (s > -0.5f * ext - gap) {
+                float q = (-0.5f * ext - s) / gap, e1 = (q - 0.12f) / 0.10f, e2 = (q - 0.88f) / 0.10f;
+                float edge = _expf(-e1 * e1) + 0.6f * _expf(-e2 * e2);
+                float er = puEdge / 100.0f * edge;
+                c = make_float3(0.03f + 0.85f * er, 0.02f + 0.20f * er, 0.02f + 0.08f * er);
+            } else {
+                c = bil(p_ToTexR, p_ToTexG, p_ToTexB, fx - dx * o + dx * t + dx * pitch, fy - dy * o + dy * t + dy * pitch, W, H);
+            }
+            r += toLin(c.x); g += toLin(c.y); b += toLin(c.z);
+        }
+        l = make_float3(r / (float)(n), g / (float)(n), b / (float)(n));
+        l = glowed(l, bell, glow * 0.6f);
+        k = bell;
+    } else if (st == 2 || st == 3) {
+        float Z = 1.0f + 3.0f * puTravel / 100.0f;
+        float kb = puBlur / 100.0f * 0.55f * bell;
+        if (p < 0.5f) {
+            float u = p * 2.0f, z = 1.0f + (Z - 1.0f) * u * u * u;
+            float s = st == 2 ? z : 1.0f / z;
+            l = zoomBlur(p_FromTexR, p_FromTexG, p_FromTexB, fx, fy, s, kb, W, H);
+        } else {
+            float v = 2.0f - p * 2.0f, z = 1.0f + (Z - 1.0f) * v * v * v;
+            float s = st == 2 ? z : 1.0f / z;
+            l = zoomBlur(p_ToTexR, p_ToTexG, p_ToTexB, fx, fy, s, kb, W, H);
+        }
+        l = glowed(l, bell, glow);
+        k = bell;
+    } else {
+        int nb = (int)(puBeats + 0.5f);
+        int i = (int)(p * (float)(nb));
+        if (i > nb - 1) i = nb - 1;
+        if (i == 0) { float3 a = rgbAt(p_FromTexR, p_FromTexG, p_FromTexB, x, y, W, H); return make_float4(a.x, a.y, a.z, 1.0f); }
+        if (i == nb - 1) { float3 b = rgbAt(p_ToTexR, p_ToTexG, p_ToTexB, x, y, W, H); return make_float4(b.x, b.y, b.z, 1.0f); }
+        uint sd = (uint)(puSeed) * 613u + 7u;
+        int ph = rnd3(0, 11, sd) < 0.5f ? 1 : 0, dbl = 1 + (int)(rnd3(0, 15, sd) * (float)(nb - 2));
+        int useB = ((i + ph + (i >= dbl ? 1 : 0)) & 1) == 1 ? 1 : 0;
+        float tr = 0.3f + puTravel / 100.0f;
+        float jo = (rnd3(i, 12, sd) - 0.5f) * 0.22f * (float)(H) * tr;
+        float jp = (rnd3(i, 13, sd) - 0.5f) * 0.08f * (float)(H) * tr;
+        float zs = 1.0f + 0.16f * tr * rnd3(i, 16, sd);
+        float ox = dx * jo - dy * jp, oy = dy * jo + dx * jp;
+        float cx = 0.5f * (float)(W) - 0.5f, cy = 0.5f * (float)(H) - 0.5f;
+        float sx = cx + (fx - ox - cx) / zs, sy = cy + (fy - oy - cy) / zs;
+        float len = _fabs(jo) * puBlur / 100.0f * 1.2f;
+        if (useB == 1) l = lineBlur(p_ToTexR, p_ToTexG, p_ToTexB, sx, sy, dx, dy, len, W, H);
+        else l = lineBlur(p_FromTexR, p_FromTexG, p_FromTexB, sx, sy, dx, dy, len, W, H);
+        float fl = 1.0f + glow * 1.6f * (rnd3(i, 14, sd) - 0.3f);
+        l = make_float3(l.x * fl, l.y * fl, l.z * fl);
+        k = 1.0f;
+    }
+    float3 o = lightOut(l.x, l.y, l.z, k);
+    return make_float4(o.x, o.y, o.z, 1.0f);
+}
+
+// fusegen: the kernel entry (Fusion's rows run bottom up; py is the DCTL's top-down row)
+__KERNEL__ void DevelopPushK947973c1(__CONSTANTREF__ DevelopPushP947973c1 *params, __TEXTURE2D__ p_FromTexR, __TEXTURE2D__ p_FromTexG, __TEXTURE2D__ p_FromTexB, __TEXTURE2D__ p_FromTexA, __TEXTURE2D__ p_ToTexR, __TEXTURE2D__ p_ToTexG, __TEXTURE2D__ p_ToTexB, __TEXTURE2D__ p_ToTexA, __TEXTURE2D_WRITE__ dvDst)
+{
+    DEFINE_KERNEL_ITERATORS_XY(x, y)
+    if (x < params->dvSize[0] && y < params->dvSize[1])
+    {
+        int py = params->dvFlipY != 0 ? params->dvSize[1] - 1 - y : y;
+        float4 c = dvMain(params->dvSize[0], params->dvSize[1], x, py, p_FromTexR, p_FromTexG, p_FromTexB, p_FromTexA, p_ToTexR, p_ToTexG, p_ToTexB, p_ToTexA, params->dvFrame, params->dvProgress, params->puStyle, params->puAngle, params->puTravel, params->puBlur, params->puGlow, params->puEdge, params->puBeats, params->puSeed);
+        _tex2DVec4Write(dvDst, x, y, c);
+    }
+}
+]]
+
+-- the plain source first; the compatibility source only if the plain one does not build
+DvSources = { DvMath .. DvMapping .. DvKernelText, DvCompat .. DvMath .. DvMapping .. DvKernelText }
+DvWorking = nil
+
+-- the last status of each tool, so a change is reported once
+DvLast = {}
+
+-- the compute node's error log (DVIPComputeNode:GetErrorLog, a name in fusionsystem.dll), or a note that it has none
+function DvNodeLog(node)
+	local log = nil
+	if node then
+		pcall(function()
+			log = node:GetErrorLog()
+		end)
+	end
+	if log == nil or log == "" then
+		return "(the node gave no error log; see the Fusion console)"
+	end
+	return tostring(log)
+end
+
+-- report a status: the console, the tool's data and the log file, each once per change
+function DvNote(tool, failed, msg)
+	local key = DvName
+	pcall(function()
+		key = tool.Name
+	end)
+	key = tostring(key)
+	local text = msg
+	if failed then
+		text = "FAILED: " .. msg
+	end
+	if DvLast[key] == text then
+		return
+	end
+	DvLast[key] = text
+	print(DvName .. " [" .. key .. "] " .. text)
+	pcall(function()
+		tool:SetData("DevelopFuse.Status", text)
+	end)
+	pcall(function()
+		local dir = os.getenv("TEMP") or os.getenv("TMP") or "."
+		local f = io.open(dir .. "/DevelopFuse.log", "a")
+		if f then
+			local line = (text:gsub("[\r\n]+", " | "))
+			f:write(os.date("%Y-%m-%d %H:%M:%S") .. "\t" .. key .. "\t" .. DvName .. "\t" .. line .. "\n")
+			f:close()
+		end
+	end)
+end
+
+-- a Lua error's message with its traceback when the debug library is there
+function DvTrace(e)
+	if debug and debug.traceback then
+		return debug.traceback(tostring(e), 2)
+	end
+	return tostring(e)
+end
+
+-- the visible error: a solid magenta frame the size of ref (nil when there is no picture to size it by)
+function DvFailImage(ref)
+	local bad = nil
+	if ref then
+		pcall(function()
+			bad = Image({IMG_Like = ref})
+			bad:Fill(Pixel({R = 1.0, G = 0.0, B = 1.0, A = 1.0}))
+		end)
+	end
+	return bad
+end
+
+function Create()
+	InProgress = self:AddInput("Progress", "Progress", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 0.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 1.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 1.0,
+		INPS_StatusText = "The transition from Outgoing (0) to Incoming (1): the DCTL's TRANSITION_PROGRESS",
+		})
+	InPuStyle = self:AddInput("Style", "puStyle", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 0.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 4.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 4.0,
+		INPS_StatusText = "0 Swish (a whip, lay it 7 to 9 frames), 1 Film Whip, 2 Hyper Push, 3 Hyper Pull, 4 Flutter Cut",
+		})
+	InPuAngle = self:AddInput("Angle", "puAngle", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 180.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 360.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 360.0,
+		INPS_StatusText = "The way the picture moves: 0 right, 90 down, 180 left, 270 up",
+		})
+	InPuTravel = self:AddInput("Travel", "puTravel", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 50.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InPuBlur = self:AddInput("Blur", "puBlur", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 70.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InPuGlow = self:AddInput("Glow", "puGlow", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 40.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InPuEdge = self:AddInput("Film Edge", "puEdge", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 60.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		INPS_StatusText = "Film Whip: the red light on the frame line's edge",
+		})
+	InPuBeats = self:AddInput("Beats", "puBeats", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 8.0,
+		INP_MinScale = 3.0,
+		INP_MaxScale = 16.0,
+		INP_MinAllowed = 3.0,
+		INP_MaxAllowed = 16.0,
+		INPS_StatusText = "Flutter Cut: how many beats the stutter is cut into",
+		})
+	InPuSeed = self:AddInput("Seed", "puSeed", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Default = 0.0,
+		INP_MinScale = 0.0,
+		INP_MaxScale = 100.0,
+		INP_MinAllowed = 0.0,
+		INP_MaxAllowed = 100.0,
+		})
+	InFrameOffset = self:AddInput("Frame Offset", "FrameOffset", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "SliderControl",
+		INP_Integer = true,
+		INP_Default = 0,
+		INP_MinScale = 0,
+		INP_MaxScale = 1000,
+		INPS_StatusText = "Added to the comp frame to make the DCTL's frame value (Resolve's TIMELINE_FRAME_INDEX)",
+		})
+	InHoldFrame = self:AddInput("Hold Frame", "HoldFrame", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "CheckboxControl",
+		INP_Integer = true,
+		INP_Default = 0,
+		INPS_StatusText = "The frame value is Frame Offset alone, so a moving effect holds still",
+		})
+	InFlipY = self:AddInput("Rows Top Down", "FlipY", {
+		LINKID_DataType = "Number",
+		INPID_InputControl = "CheckboxControl",
+		INP_Integer = true,
+		INP_Default = 1,
+		IC_Visible = false,
+		})
+	InOutgoing = self:AddInput("Outgoing", "Outgoing", {
+		LINKID_DataType = "Image",
+		LINK_Main = 1,
+		})
+	InIncoming = self:AddInput("Incoming", "Incoming", {
+		LINKID_DataType = "Image",
+		LINK_Main = 2,
+		INP_Required = false,
+		})
+	OutImage = self:AddOutput("Output", "Output", {
+		LINKID_DataType = "Image",
+		LINK_Main = 1,
+		})
+end
+
+-- one channel of img as its own texture, rows top-down (DvSplitSource); returns the plane, or nil and why
+function DvPlane(req, img, ch, flip)
+	local plane = Image({IMG_Like = img})
+	local node = DVIPComputeNode(req, DvSplitName, DvSplitSource, DvSplitParamsName, DvSplitParams)
+	if not node then
+		return nil, "the split kernel's compute node was not created (DVIPComputeNode gave nil)"
+	end
+	local p = node:GetParamBlock(DvSplitParams)
+	p.ch = ch
+	p.flipY = flip
+	p.size[0] = img.DataWindow:Width()
+	p.size[1] = img.DataWindow:Height()
+	node:SetParamBlock(p)
+	node:AddInput("src", img)
+	node:AddOutput("dst", plane)
+	if node:RunSession(req) then
+		return plane
+	end
+	return nil, "the split kernel did not run: " .. DvNodeLog(node)
+end
+
+-- the kernel over every pixel with source k; returns true when it ran, or false and why
+function DvRun(req, k, src, inc, planes, out, frame, flip, progress)
+	local node = DVIPComputeNode(req, DvKernelName, DvSources[k], DvParamsName, DvParams)
+	if not node then
+		return false, "source " .. k .. ": the compute node was not created (DVIPComputeNode gave nil)"
+	end
+	local p = node:GetParamBlock(DvParams)
+	p.puStyle = InPuStyle:GetValue(req).Value
+	p.puAngle = InPuAngle:GetValue(req).Value
+	p.puTravel = InPuTravel:GetValue(req).Value
+	p.puBlur = InPuBlur:GetValue(req).Value
+	p.puGlow = InPuGlow:GetValue(req).Value
+	p.puEdge = InPuEdge:GetValue(req).Value
+	p.puBeats = InPuBeats:GetValue(req).Value
+	p.puSeed = InPuSeed:GetValue(req).Value
+	p.dvProgress = progress
+	p.dvFrame = frame
+	p.dvFlipY = flip
+	p.dvSize[0] = src.DataWindow:Width()
+	p.dvSize[1] = src.DataWindow:Height()
+	node:SetParamBlock(p)
+	node:AddInput("p_FromTexR", planes.p_FromTexR)
+	node:AddInput("p_FromTexG", planes.p_FromTexG)
+	node:AddInput("p_FromTexB", planes.p_FromTexB)
+	node:AddInput("p_FromTexA", planes.p_FromTexA)
+	node:AddInput("p_ToTexR", planes.p_ToTexR)
+	node:AddInput("p_ToTexG", planes.p_ToTexG)
+	node:AddInput("p_ToTexB", planes.p_ToTexB)
+	node:AddInput("p_ToTexA", planes.p_ToTexA)
+	node:AddOutput("dvDst", out)
+	if node:RunSession(req) then
+		return true
+	end
+	return false, "source " .. k .. ": RunSession failed: " .. DvNodeLog(node)
+end
+
+function DvProcess(req)
+	local src = InOutgoing:GetValue(req)
+	if not src then
+		return nil, "no Outgoing image", true, nil
+	end
+	if req:IsPreCalc() then
+		return Image({IMG_Like = src, IMG_NoData = true}), nil, false, src
+	end
+	local inc = InIncoming:GetValue(req)
+	if not inc then
+		return src, "Incoming is not connected, so Outgoing passes through", false, src
+	end
+	local progress = InProgress:GetValue(req).Value
+	local out = Image({IMG_Like = src})
+	local flip = math.floor(InFlipY:GetValue(req).Value + 0.5)
+	local frame = math.floor(InFrameOffset:GetValue(req).Value + 0.5)
+	if InHoldFrame:GetValue(req).Value < 0.5 then
+		frame = frame + math.floor(req.Time + 0.5)
+	end
+	local planes = {}
+	local why = nil
+	planes.p_FromTexR, why = DvPlane(req, src, 0, flip)
+	if not planes.p_FromTexR then
+		return nil, "p_FromTexR: " .. tostring(why), true, src
+	end
+	planes.p_FromTexG, why = DvPlane(req, src, 1, flip)
+	if not planes.p_FromTexG then
+		return nil, "p_FromTexG: " .. tostring(why), true, src
+	end
+	planes.p_FromTexB, why = DvPlane(req, src, 2, flip)
+	if not planes.p_FromTexB then
+		return nil, "p_FromTexB: " .. tostring(why), true, src
+	end
+	planes.p_FromTexA = src -- the DCTL never reads this plane
+	planes.p_ToTexR, why = DvPlane(req, inc, 0, flip)
+	if not planes.p_ToTexR then
+		return nil, "p_ToTexR: " .. tostring(why), true, src
+	end
+	planes.p_ToTexG, why = DvPlane(req, inc, 1, flip)
+	if not planes.p_ToTexG then
+		return nil, "p_ToTexG: " .. tostring(why), true, src
+	end
+	planes.p_ToTexB, why = DvPlane(req, inc, 2, flip)
+	if not planes.p_ToTexB then
+		return nil, "p_ToTexB: " .. tostring(why), true, src
+	end
+	planes.p_ToTexA = inc -- the DCTL never reads this plane
+	local order = {}
+	if DvWorking then
+		order[1] = DvWorking
+	end
+	for k = 1, #DvSources do
+		if k ~= DvWorking then
+			order[#order + 1] = k
+		end
+	end
+	local errs = {}
+	for i = 1, #order do
+		local ok, err = DvRun(req, order[i], src, inc, planes, out, frame, flip, progress)
+		if ok then
+			DvWorking = order[i]
+			return out, "ok, the kernel runs from source " .. order[i], false, src
+		end
+		errs[#errs + 1] = tostring(err)
+	end
+	return nil, "the kernel ran from no source: " .. table.concat(errs, " || "), true, src
+end
+
+-- every failure is reported and shows as magenta; the input never passes through quietly
+function Process(req)
+	local res, msg, failed, ref = nil, nil, true, nil
+	local called, err = xpcall(function()
+		res, msg, failed, ref = DvProcess(req)
+	end, DvTrace)
+	if not called then
+		res, msg, failed = nil, "Lua error in Process: " .. tostring(err), true
+		if not ref then
+			pcall(function()
+				ref = InOutgoing:GetValue(req)
+			end)
+		end
+	end
+	if msg then
+		DvNote(self, failed, msg)
+	end
+	if failed then
+		res = DvFailImage(ref)
+	end
+	OutImage:Set(req, res)
+end

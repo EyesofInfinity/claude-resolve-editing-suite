@@ -1,0 +1,171 @@
+// Develop Stage Light: a lamp on a stand, a hole cut in the light, and a rig of lamps through haze, in one transform
+// DCTL, each built from what a lamp does to a scene:
+//   0 Spotlight: a pool of light at Position, its size and shape (Size, Aspect, Angle) and a soft penumbra (Softness).
+//     The picture is relit: multiplied up by Light (stops) inside the pool, a little hotter at its centre as a lamp's
+//     field is, coloured by its gel (Gel warm or cold, Colour and Hue for a coloured gel); outside it falls to Ambient
+//     (stops). Black stays black; nothing is added.
+//   1 Reverse Spotlight: the same pool cut out of the light, as a flag would: the pool falls to Ambient, the rest of the
+//     frame takes Light and the gel.
+//   2 Stage Light: Beams lamps hung on a rig at Position X and Rig Y (above the frame by default), Rig Width apart,
+//     aimed at Angle and fanned by Fan, each a cone Size wide. Their light is seen in the haze: the haze is lit only
+//     inside each cone, brightest near the lamp and thinning as the cone spreads, drifting smoke and streaks moving
+//     through it by TIMELINE_FRAME_INDEX. Where a beam meets the floor (Landing) the picture is lit in a pool, and a
+//     little all along the cone; the rest of the stage falls to Ambient. Sweep and Speed swing the beams.
+// Light is added in linear and the picture relit by multiplying, so the haze lifts black only inside a beam. Amount
+// mixes with the picture in display terms; Amount 0 is the input exactly. An OpenFX DCTL effect or a DCTL plugin node.
+// MIT License.
+
+DEFINE_UI_PARAMS(slAmount, Stage Light, DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(slMode,   Mode,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 2.0, 1.0)
+DEFINE_UI_PARAMS(slX,      Position X,  DCTLUI_SLIDER_FLOAT, 50.0, -50.0, 150.0, 1.0)
+DEFINE_UI_PARAMS(slY,      Position Y,  DCTLUI_SLIDER_FLOAT, 55.0, -50.0, 150.0, 1.0)
+DEFINE_UI_PARAMS(slSize,   Size,        DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(slAspect, Aspect,      DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(slAngle,  Angle,       DCTLUI_SLIDER_FLOAT, 0.0, -90.0, 90.0, 1.0)
+DEFINE_UI_PARAMS(slSoft,   Softness,    DCTLUI_SLIDER_FLOAT, 25.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(slLight,  Light,       DCTLUI_SLIDER_FLOAT, 0.7, -2.0, 3.0, 0.1)
+DEFINE_UI_PARAMS(slAmb,    Ambient,     DCTLUI_SLIDER_FLOAT, -2.0, -6.0, 0.0, 0.1)
+DEFINE_UI_PARAMS(slGel,    Gel,         DCTLUI_SLIDER_FLOAT, 15.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(slSat,    Colour,      DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(slHue,    Hue,         DCTLUI_SLIDER_FLOAT, 210.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(slSpread, Hue Spread,  DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 180.0, 1.0)
+DEFINE_UI_PARAMS(slBeams,  Beams,       DCTLUI_SLIDER_FLOAT, 3.0, 1.0, 6.0, 1.0)
+DEFINE_UI_PARAMS(slRigY,   Rig Y,       DCTLUI_SLIDER_FLOAT, -6.0, -50.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(slRig,    Rig Width,   DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(slFan,    Fan,         DCTLUI_SLIDER_FLOAT, 12.0, -45.0, 45.0, 1.0)
+DEFINE_UI_PARAMS(slHaze,   Haze,        DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(slDepth,  Depth,       DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(slLand,   Landing,     DCTLUI_SLIDER_FLOAT, 88.0, 0.0, 150.0, 1.0)
+DEFINE_UI_PARAMS(slSweep,  Sweep,       DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 45.0, 1.0)
+DEFINE_UI_PARAMS(slSpeed,  Speed,       DCTLUI_SLIDER_FLOAT, 20.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(slSeed,   Seed,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Mode, "0 Spotlight, 1 Reverse Spotlight, 2 Stage Light")
+DEFINE_UI_TOOLTIP(Light, "Stops: the lit part's exposure (Spotlight the pool, Reverse the rest, Stage where the beams land)")
+DEFINE_UI_TOOLTIP(Ambient, "Stops: the unlit part's exposure")
+DEFINE_UI_TOOLTIP(Gel, "The lamp's colour: warm (amber) above 0, cold (blue) below")
+DEFINE_UI_TOOLTIP(Colour, "A coloured gel of Hue mixed over Gel; Hue Spread fans the Stage beams round the wheel")
+DEFINE_UI_TOOLTIP(Angle, "Spotlight: the pool's turn; Stage: the rig's aim, 0 straight down")
+DEFINE_UI_TOOLTIP(Size, "Spotlight: the pool's size; Stage: each cone's width")
+DEFINE_UI_TOOLTIP(Depth, "Stage: how far the beams pass behind dark silhouettes (trunks, branches)")
+DEFINE_UI_TOOLTIP(Landing, "Stage: where the beams meet the floor, percent of the frame's height")
+
+#include "../light/light.h"
+
+__DEVICE__ float3 gelColour(float gel, float h, float s)
+{
+    float w = _fmaxf(gel, 0.0f) / 100.0f, c = _fmaxf(-gel, 0.0f) / 100.0f;
+    float r = toLin(1.0f - 0.42f * c), g = toLin(1.0f - 0.20f * w - 0.16f * c), b = toLin(1.0f - 0.55f * w);
+    float k = _fmod(h / 60.0f + 600.0f, 6.0f);
+    float hr = toLin(_saturatef(_fabs(k - 3.0f) - 1.0f)), hg = toLin(_saturatef(2.0f - _fabs(k - 2.0f))), hb = toLin(_saturatef(2.0f - _fabs(k - 4.0f)));
+    r = lerp1(r, hr, s); g = lerp1(g, hg, s); b = lerp1(b, hb, s);
+    float m = _fmaxf(_fmaxf(r, g), _fmaxf(b, 1e-4f));
+    r /= m; g /= m; b /= m;
+    float up = _fminf(lerp1(1.0f, 1.0f / _fmaxf(luma(r, g, b), 0.02f), 0.5f), 3.0f);
+    return make_float3(r * up, g * up, b * up);
+}
+
+__DEVICE__ float2 poolAt(float x, float y, float cx, float cy, float R, float a, float ang, float pen)
+{
+    float px = x - cx, py = y - cy, ca = _cosf(ang), sa = _sinf(ang), sq = _sqrtf(a);
+    float qx = (px * ca + py * sa) / (R * sq), qy = (-px * sa + py * ca) * sq / R;
+    float r = _sqrtf(qx * qx + qy * qy);
+    return make_float2(1.0f - sstep(1.0f - pen, 1.0f + pen, r), r);
+}
+
+__DEVICE__ float ringLuma(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int x, int y, float r, int w, int h)
+{
+    float s = 0.0f;
+    for (int k = 0; k < 8; k++) {
+        float a = 0.7853982f * (float)(k) + 0.39f;
+        int px = (int)(_fminf(_fmaxf((float)(x) + r * _cosf(a), 0.0f), (float)(w - 1)));
+        int py = (int)(_fminf(_fmaxf((float)(y) + r * _sinf(a), 0.0f), (float)(h - 1)));
+        s += luma(_saturatef(_tex2D(tr, px, py)), _saturatef(_tex2D(tg, px, py)), _saturatef(_tex2D(tb, px, py)));
+    }
+    return s / 8.0f;
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float3 c0 = make_float3(_tex2D(p_TexR, p_X, p_Y), _tex2D(p_TexG, p_X, p_Y), _tex2D(p_TexB, p_X, p_Y));
+    if (slAmount <= 0.0f) return c0;
+    int m = (int)(slMode + 0.5f);
+    float hh = (float)(p_Height), aspect = (float)(p_Width) / hh;
+    float x = ((float)(p_X) + 0.5f) / hh, y = ((float)(p_Y) + 0.5f) / hh;
+    float lr = toLin(_saturatef(c0.x)), lg = toLin(_saturatef(c0.y)), lb = toLin(_saturatef(c0.z));
+    float soft = slSoft / 100.0f, gain = _exp2f(slLight), amb = _exp2f(slAmb);
+    float t = (float)(TIMELINE_FRAME_INDEX) / 24.0f;
+    uint sd = (uint)(slSeed) * 613u + 5u;
+    float3 o;
+    if (m <= 1) {
+        float R = 0.06f + 0.0065f * slSize;
+        float a = _exp2f((slAspect - 50.0f) / 25.0f);
+        float pen = _fmaxf(0.03f + 0.75f * soft * soft + 0.15f * soft, 2.0f / (hh * R));
+        float2 pl = poolAt(x, y, slX / 100.0f * aspect, slY / 100.0f, R, a, slAngle * 0.0174533f, pen);
+        float lit = m == 0 ? pl.x : 1.0f - pl.x;
+        float field = m == 0 ? 0.9f + 0.2f * _expf(-2.5f * pl.y * pl.y) : 1.0f;
+        float3 gc = gelColour(slGel, slHue, slSat / 100.0f);
+        float gn = gain * field;
+        float fr = lerp1(amb, gn * gc.x, lit), fg = lerp1(amb, gn * gc.y, lit), fb = lerp1(amb, gn * gc.z, lit);
+        o = lightOut(lr * fr, lg * fg, lb * fb, _saturatef((gn - 1.0f) * lit * 2.0f));
+    } else {
+        int n = (int)(slBeams + 0.5f);
+        float mid = 0.5f * (float)(n - 1);
+        float sy = slRigY / 100.0f, land = slLand / 100.0f;
+        float half = (1.5f + 0.16f * slSize) * 0.0174533f, th = _sinf(half) / _cosf(half);
+        float rigHalf = 0.5f * slRig / 100.0f * aspect;
+        float smoke = fbm(x * 3.2f - t * 0.06f, y * 3.2f + t * 0.02f, t * 0.12f, 4, sd + 3u);
+        float front = 0.0f;
+        if (slDepth > 0.0f) {
+            float Ld = luma(_saturatef(c0.x), _saturatef(c0.y), _saturatef(c0.z));
+            float Lr = 0.5f * (ringLuma(p_TexR, p_TexG, p_TexB, p_X, p_Y, 0.037f * hh, p_Width, p_Height) + ringLuma(p_TexR, p_TexG, p_TexB, p_X, p_Y, 0.083f * hh, p_Width, p_Height));
+            front = slDepth / 100.0f * sstep(0.15f, 0.55f, (Lr - Ld) / (Lr + 0.04f));
+        }
+        float gp = gain * 1.41f;
+        float addr = 0.0f, addg = 0.0f, addb = 0.0f, litr = 0.0f, litg = 0.0f, litb = 0.0f, lsum = 0.0f;
+        float pen = 0.10f + 0.6f * soft;
+        float hz = slHaze / 100.0f;
+        for (int i = 0; i < 6; i++) {
+            if (i >= n) break;
+            float fi = (float)(i) - mid;
+            float sx = slX / 100.0f * aspect + (n > 1 ? fi / mid * rigHalf : 0.0f);
+            float ph = 6.2831853f * hash01(sd, (uint)(i), 17u);
+            float sw = slSweep * _sinf(6.2831853f * slSpeed / 100.0f * 0.5f * t + ph) * ((i & 1) == 0 ? 1.0f : -1.0f);
+            float an = (slAngle + fi * slFan + sw) * 0.0174533f;
+            float dx = _sinf(an), dy = _cosf(an);
+            float vx = x - sx, vy = y - sy;
+            float al = vx * dx + vy * dy, pr = vx * dy - vy * dx;
+            float3 gc = gelColour(slGel, slHue + fi * slSpread, slSat / 100.0f);
+            float ds = _sqrtf(vx * vx + vy * vy);
+            float sg = 0.9f * _expf(-ds / 0.012f) + 0.10f * _expf(-ds / 0.06f);
+            addr += sg * gc.x * hz; addg += sg * gc.y * hz; addb += sg * gc.z * hz;
+            if (al <= 0.0f) continue;
+            float rad = 0.010f + al * th;
+            float u = _fabs(pr) / rad;
+            float Lh = dy > 0.05f ? (land - sy) / dy : 1e3f;
+            float end = Lh < 1e2f ? 1.0f - sstep(land - 0.10f, land + 0.5f * 0.42f * (0.010f + Lh * th), y) : 1.0f;
+            float edge = 1.0f - sstep(1.0f - pen, 1.0f + 0.5f * pen, u);
+            float chord = _sqrtf(_saturatef(1.0f - 0.85f * u * u));
+            float fall = 0.12f / (0.12f + al) * _sqrtf(0.10f / (0.10f + th));
+            float st = fbm(al * 1.6f + 9.0f * (float)(i), pr / rad * 2.2f, t * 0.15f, 3, sd + 40u + (uint)(i));
+            float dens = 0.06f + 2.0f * sstep(0.34f, 0.70f, 0.55f * smoke + 0.45f * st);
+            float bm = hz * 0.55f * edge * (0.35f + 0.65f * chord) * fall * end * dens * (1.0f - front);
+            addr += bm * gc.x; addg += bm * gc.y; addb += bm * gc.z;
+            float lit = 0.32f * edge * end, pool = 0.0f;
+            if (Lh < 1e2f) {
+                float cx = sx + dx * Lh, radL = 0.010f + Lh * th;
+                float rx = radL / _fmaxf(dy, 0.3f), ry = radL * 0.42f;
+                float qx = (x - cx) / rx, qy = (y - land) / ry, pq = _sqrtf(qx * qx + qy * qy);
+                float pp = _fmaxf(pen, 0.25f);
+                pool = 1.0f - sstep(1.0f - 1.8f * pp, 1.0f + 1.6f * pp, pq);
+            }
+            float lk = _fmaxf(lit, pool) * lerp1(gain, gp, pool / _fmaxf(_fmaxf(lit, pool), 1e-4f));
+            litr += lk * gc.x; litg += lk * gc.y; litb += lk * gc.z; lsum += _fmaxf(lit, pool);
+        }
+        float ka = amb * (1.0f - _fminf(lsum, 1.0f));
+        float r = lr * (ka + litr) + addr, g = lg * (ka + litg) + addg, b = lb * (ka + litb) + addb;
+        o = lightOut(r, g, b, _saturatef(4.0f * (addr + addg + addb) + (gp - 1.0f) * lsum * 2.0f));
+    }
+    float k = slAmount / 100.0f;
+    return make_float3(_saturatef(lerp1(c0.x, o.x, k)), _saturatef(lerp1(c0.y, o.y, k)), _saturatef(lerp1(c0.z, o.z, k)));
+}

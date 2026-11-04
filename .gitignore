@@ -1,0 +1,13 @@
+tests/out/
+__pycache__/
+runs/
+develop.local.json
+dist/
+animation/reanimate/scripts/node_modules/
+animation/animate/node_modules/
+node_modules/
+projects/
+builder/smoke/*.mp4
+effects/beat/out/
+.sound-effects/
+.hyperframes/

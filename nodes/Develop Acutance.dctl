@@ -1,0 +1,87 @@
+// Develop Acutance: contrast-adaptive sharpening on display luma, after AMD FidelityFX CAS (MIT,
+// GPUOpen; its published "better diagonals" weighting, written fresh here), plus film's adjacency effect, a halo
+// clamp and shadow and highlight guards. Rec.709 display in and out. Sharpening already-sharp edges less and soft
+// detail more is CAS's point: the weight falls as the 3 x 3 neighbourhood nears black or white. The change is made
+// on luma and added to all three channels, so edges gain contrast without colour fringes. With Acutance and Film
+// Adjacency at 0 the input comes back untouched. Place it after the look (and after Bloom), before grain.
+// MIT License.
+
+DEFINE_UI_PARAMS(acuAmt,  Acutance,          DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(acuFilm, Film Adjacency,    DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(acuHalo, Halo Limit,        DCTLUI_SLIDER_FLOAT, 15.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(acuShad, Shadow Protect,    DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(acuHigh, Highlight Protect, DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Acutance, "Crisper fine detail; edges that are already sharp get less")
+DEFINE_UI_TOOLTIP(Film Adjacency, "Film's developer edge effect: a soft contrast band about 3 px wide along edges")
+DEFINE_UI_TOOLTIP(Halo Limit, "How far an edge may overshoot its neighbours, in thousandths of white")
+DEFINE_UI_TOOLTIP(Shadow Protect, "Less sharpening in the darkest tones, where noise lives")
+DEFINE_UI_TOOLTIP(Highlight Protect, "Less sharpening near white")
+
+__DEVICE__ float smooth01(float a, float b, float x)
+{
+    float t = _saturatef((x - a) / (b - a));
+    return t * t * (3.0f - 2.0f * t);
+}
+
+__DEVICE__ float lumaAt(int x, int y, int w, int h, __TEXTURE__ R, __TEXTURE__ G, __TEXTURE__ B)
+{
+    x = x < 0 ? 0 : (x > w - 1 ? w - 1 : x);
+    y = y < 0 ? 0 : (y > h - 1 ? h - 1 : y);
+    return 0.2126f * _tex2D(R, x, y) + 0.7152f * _tex2D(G, x, y) + 0.0722f * _tex2D(B, x, y);
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float r = _tex2D(p_TexR, p_X, p_Y), g = _tex2D(p_TexG, p_X, p_Y), b = _tex2D(p_TexB, p_X, p_Y);
+    if (acuAmt <= 0.0f && acuFilm <= 0.0f)
+    {
+        return make_float3(r, g, b);
+    }
+    float e = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+    float n = lumaAt(p_X, p_Y - 1, p_Width, p_Height, p_TexR, p_TexG, p_TexB);
+    float s = lumaAt(p_X, p_Y + 1, p_Width, p_Height, p_TexR, p_TexG, p_TexB);
+    float wv = lumaAt(p_X - 1, p_Y, p_Width, p_Height, p_TexR, p_TexG, p_TexB);
+    float ea = lumaAt(p_X + 1, p_Y, p_Width, p_Height, p_TexR, p_TexG, p_TexB);
+    float nw = lumaAt(p_X - 1, p_Y - 1, p_Width, p_Height, p_TexR, p_TexG, p_TexB);
+    float ne = lumaAt(p_X + 1, p_Y - 1, p_Width, p_Height, p_TexR, p_TexG, p_TexB);
+    float sw = lumaAt(p_X - 1, p_Y + 1, p_Width, p_Height, p_TexR, p_TexG, p_TexB);
+    float se = lumaAt(p_X + 1, p_Y + 1, p_Width, p_Height, p_TexR, p_TexG, p_TexB);
+    float mnC = _fminf(_fminf(_fminf(n, s), _fminf(wv, ea)), e);
+    float mxC = _fmaxf(_fmaxf(_fmaxf(n, s), _fmaxf(wv, ea)), e);
+    float mnA = _fminf(mnC, _fminf(_fminf(nw, ne), _fminf(sw, se)));
+    float mxA = _fmaxf(mxC, _fmaxf(_fmaxf(nw, ne), _fmaxf(sw, se)));
+    float lo = mnA, hi = mxA;
+    float dy = 0.0f;
+    if (acuAmt > 0.0f)
+    {
+        float mn = mnC + mnA, mx = mxC + mxA;
+        float amp = _sqrtf(_saturatef(_fminf(mn, 2.0f - mx) / _fmaxf(mx, 1e-5f)));
+        float w = -amp / (8.0f - 3.0f * acuAmt / 100.0f);
+        float ycas = (w * (n + s + wv + ea) + e) / (1.0f + 4.0f * w);
+        dy = (ycas - e) * _fminf(acuAmt / 20.0f, 1.0f);
+    }
+    if (acuFilm > 0.0f)
+    {
+        float ring = 0.0f;
+        for (int k = 0; k < 8; k++)
+        {
+            int dx = k == 0 ? 3 : (k == 1 ? 2 : (k == 2 ? 0 : (k == 3 ? -2 : (k == 4 ? -3 : (k == 5 ? -2 : (k == 6 ? 0 : 2))))));
+            int dyy = k == 0 ? 0 : (k == 1 ? 2 : (k == 2 ? 3 : (k == 3 ? 2 : (k == 4 ? 0 : (k == 5 ? -2 : (k == 6 ? -3 : -2))))));
+            float v = lumaAt(p_X + dx, p_Y + dyy, p_Width, p_Height, p_TexR, p_TexG, p_TexB);
+            ring += v;
+            lo = _fminf(lo, v);
+            hi = _fmaxf(hi, v);
+        }
+        dy += 0.3f * acuFilm / 100.0f * (e - ring / 8.0f);
+    }
+    float lim = acuHalo / 1000.0f;
+    float yn = _clampf(e + dy, lo - lim, hi + lim);
+    float guard = (1.0f - acuShad / 100.0f * (1.0f - smooth01(0.04f, 0.15f, e)))
+                * (1.0f - acuHigh / 100.0f * smooth01(0.80f, 1.0f, e));
+    dy = (yn - e) * guard;
+    r = _clampf(r + dy, _fminf(r, 0.0f), _fmaxf(r, 1.0f));
+    g = _clampf(g + dy, _fminf(g, 0.0f), _fmaxf(g, 1.0f));
+    b = _clampf(b + dy, _fminf(b, 0.0f), _fmaxf(b, 1.0f));
+    return make_float3(r, g, b);
+}

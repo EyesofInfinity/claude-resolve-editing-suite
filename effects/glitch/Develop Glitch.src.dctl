@@ -1,0 +1,209 @@
+// Develop Glitch: glitch transitions in one Transition DCTL. Lay it on a cut from Edit page > OpenFX >
+// Transition > ResolveFX Color > DCTL and pick this file. Style:
+//   0 Snap: a glitch cut on the incoming shot, in five equal steps: RGB static, black with
+//     colour tears over a block-shifted picture, clean, the colour channels offset, clean. Lay it 5 frames long.
+//   1 Block Tear: hits of macroblock damage across the cut, the two shots tearing into each other in blocks and
+//     shifted rows (a stuck-block datamosh look), the strongest hit on the cut.
+//   2 Chroma Slip: the colour channels slide apart and back, the cut at the widest point.
+//   3 Static: TV static rises over the outgoing shot and falls away off the incoming, rows tearing at the peak.
+// Every style but Snap starts exactly on the outgoing shot; all six end exactly on the incoming (for input in 0 to 1). MIT License.
+
+DEFINE_UI_PARAMS(gtStyle,  Style,          DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 5.0, 1.0)
+DEFINE_UI_PARAMS(gtAmount, Glitch,         DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gtBlock,  Block Size,     DCTLUI_SLIDER_FLOAT, 50.0, 10.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gtShift,  Shift,          DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gtChroma, Chroma Offset,  DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gtStatic, Static,         DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gtHits,   Hits,           DCTLUI_SLIDER_FLOAT, 12.0, 3.0, 30.0, 1.0)
+DEFINE_UI_PARAMS(gtSeed,   Seed,           DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gtGrit,   Grit,           DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gtDither, Dither,         DCTLUI_SLIDER_FLOAT, 85.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Style, "0 Snap (lay it 5 frames), 1 Block Tear, 2 Chroma Slip, 3 Static, 4 Channel Change, 5 Crunch")
+DEFINE_UI_TOOLTIP(Hits, "Block Tear: how many beats the transition is cut into; some hit, the cut hits hardest")
+DEFINE_UI_TOOLTIP(Grit, "Grain riding the picture's brightness on every glitched pixel")
+DEFINE_UI_TOOLTIP(Dither, "Glitched frames crushed to few levels through a Bayer dither; 100 is 3 levels a channel")
+
+#include "../light/light.h"
+#include "glitch.h"
+
+__DEVICE__ float3 chromaAt(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int x, int y, int w, int h, int off)
+{
+    float3 a = rgbAt(tr, tg, tb, x + off, y, w, h), c = rgbAt(tr, tg, tb, x - off, y, w, h);
+    return make_float3(a.x, _tex2D(tg, clampi(x, 0, w - 1), clampi(y, 0, h - 1)), c.z);
+}
+
+__DEVICE__ float4 transition(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_FromTexR, __TEXTURE__ p_FromTexG, __TEXTURE__ p_FromTexB, __TEXTURE__ p_FromTexA, __TEXTURE__ p_ToTexR, __TEXTURE__ p_ToTexG, __TEXTURE__ p_ToTexB, __TEXTURE__ p_ToTexA)
+{
+    float p = _saturatef(TRANSITION_PROGRESS);
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float sc = (float)(H) / 1080.0f;
+    int style = (int)(gtStyle + 0.5f);
+    float amt = gtAmount / 100.0f;
+    uint sd = (uint)(gtSeed) * 977u + 5u;
+    int bp = (int)((8.0f + 88.0f * (gtBlock - 10.0f) / 90.0f) * sc) + 1;
+    float shiftMax = 0.15f * gtShift / 100.0f * (float)(W);
+    int coff = (int)(24.0f * gtChroma / 100.0f * sc);
+    int gs = (int)(2.0f * sc) + 1;
+    int gx = (int)(x / gs), gy = (int)(y / gs);
+    float3 A = rgbAt(p_FromTexR, p_FromTexG, p_FromTexB, x, y, W, H);
+    float3 B = rgbAt(p_ToTexR, p_ToTexG, p_ToTexB, x, y, W, H);
+    float3 o = B;
+    float g = 0.0f;
+
+    if (style == 0) {
+        int seg = (int)(p * 5.0f);
+        if (seg > 4) seg = 4;
+        if (seg == 0) {
+            int band = (int)(y / ((int)(bp / 4) + 1));
+            int dx = (int)((rnd3(band, 0, sd + 11u) - 0.5f) * 0.25f * shiftMax);
+            float3 c = rgbAt(p_ToTexR, p_ToTexG, p_ToTexB, x + dx, y, W, H);
+            float L = luma(c.x, c.y, c.z), k = 0.6f * gtStatic / 60.0f;
+            float nr = rnd3(gx, gy, sd + 21u), ng = rnd3(gx, gy, sd + 22u), nb = rnd3(gx, gy, sd + 23u);
+            float hue = rnd3(gx, gy, sd + 24u);
+            nr *= hue < 0.33f ? 1.4f : 0.6f; ng *= (hue >= 0.33f && hue < 0.66f) ? 1.4f : 0.6f; nb *= hue >= 0.66f ? 1.4f : 0.6f;
+            float sw = 1.6f * _saturatef(k) * (0.25f + 0.75f * L);
+            o = make_float3(c.x + (nr - 0.5f) * sw, c.y + (ng - 0.5f) * sw, c.z + (nb - 0.5f) * sw);
+            g = 1.0f;
+        } else if (seg == 1) {
+            float top = (0.35f + 0.15f * rnd3(1, 2, sd + 31u)) * (float)(H);
+            if ((float)(y) < top) {
+                int col = (int)(x / (int)(3.0f * sc + 1.0f));
+                float r = rnd3(col, 7, sd + 32u);
+                float fade = 1.0f - (float)(y) / top;
+                int rb = (int)(y / ((int)(bp / 4) + 1));
+                float3 c = rgbAt(p_ToTexR, p_ToTexG, p_ToTexB, x + (int)((rnd3(rb, 6, sd + 38u) - 0.5f) * shiftMax), y, W, H);
+                float L = luma(c.x, c.y, c.z);
+                o = make_float3(0.10f * c.x, 0.10f * c.y, 0.10f * c.z);
+                if (r < 0.012f) {
+                    float w3 = rnd3(col, 8, sd + 33u), lt = (0.35f + 0.65f * L) * fade;
+                    o = make_float3(o.x + (w3 < 0.34f ? 0.9f : 0.1f) * lt, o.y + ((w3 >= 0.34f && w3 < 0.67f) ? 0.9f : 0.1f) * lt, o.z + (w3 >= 0.67f ? 0.9f : 0.1f) * lt);
+                }
+            } else {
+                int band = (int)(y / ((int)(bp / 2) + 1));
+                int dx = (int)((rnd3(band, 3, sd + 34u) - 0.5f) * 2.0f * shiftMax);
+                float3 c = rgbAt(p_ToTexR, p_ToTexG, p_ToTexB, x + dx, y, W, H);
+                c = chromaBleed(p_ToTexR, p_ToTexG, p_ToTexB, c, x + dx, y, W, H, (int)(12.0f * sc));
+                float nr = rnd3(gx, gy, sd + 35u), ng = rnd3(gx, gy, sd + 36u), nb = rnd3(gx, gy, sd + 37u);
+                float sw = 1.4f * _saturatef(0.35f * gtStatic / 60.0f) * (0.3f + 0.7f * luma(c.x, c.y, c.z));
+                o = make_float3(c.x + (nr - 0.5f) * sw, c.y + (ng - 0.5f) * sw, c.z + (nb - 0.5f) * sw);
+            }
+            g = 1.0f;
+        } else if (seg == 3) {
+            o = chromaAt(p_ToTexR, p_ToTexG, p_ToTexB, x, y, W, H, coff > 0 ? coff : 1);
+            o = chromaBleed(p_ToTexR, p_ToTexG, p_ToTexB, o, x, y, W, H, (int)(8.0f * sc));
+            if (y % 3 == 0) { o.x *= 0.92f; o.y *= 0.92f; o.z *= 0.92f; }
+            g = 0.7f;
+        }
+        o = make_float3(lerp1(B.x, o.x, amt), lerp1(B.y, o.y, amt), lerp1(B.z, o.z, amt));
+        g *= amt;
+    } else if (style == 1) {
+        int nb = (int)(gtHits + 0.5f);
+        int beat = (int)(p * (float)(nb));
+        if (beat > nb - 1) beat = nb - 1;
+        int mainBeat = (int)(nb / 2);
+        float h = beat == mainBeat ? 1.0f : (rnd3(beat, 1, sd + 41u) < 0.45f ? 0.3f + 0.5f * rnd3(beat, 2, sd + 42u) : 0.0f);
+        h *= sstep(0.0f, 0.06f, p) * sstep(0.0f, 0.06f, 1.0f - p) * amt;
+        int after = p >= 0.5f ? 1 : 0;
+        o = after ? B : A;
+        if (h > 0.0f) {
+            int bx = (int)(x / bp), by = (int)(y / ((int)(bp / 2) + 1));
+            float r = rnd3(bx, by, sd + 43u + (uint)(beat) * 7u);
+            int band = (int)(y / ((int)(bp / 4) + 1));
+            int rowShift = rnd3(band, beat, sd + 44u) < 0.3f * h ? (int)((rnd3(band, beat, sd + 45u) - 0.5f) * 2.0f * shiftMax * h) : 0;
+            int sx = x + rowShift;
+            int off = (int)((float)(coff) * h);
+            if (r < 0.35f * h) {
+                int dx = (int)((rnd3(bx, by, sd + 46u + (uint)(beat)) - 0.5f) * 2.0f * shiftMax * 0.5f);
+                o = after ? chromaAt(p_FromTexR, p_FromTexG, p_FromTexB, sx + dx, y, W, H, off) : chromaAt(p_ToTexR, p_ToTexG, p_ToTexB, sx + dx, y, W, H, off);
+            } else {
+                o = after ? chromaAt(p_ToTexR, p_ToTexG, p_ToTexB, sx, y, W, H, off) : chromaAt(p_FromTexR, p_FromTexG, p_FromTexB, sx, y, W, H, off);
+            }
+            g = h;
+        }
+    } else if (style == 2) {
+        float env = _powf(_fmaxf(_sinf(3.1415927f * p), 0.0f), 1.5f) * amt;
+        int off = (int)((float)(coff) * 2.5f * env);
+        int after = p >= 0.5f ? 1 : 0;
+        if (off < 1) {
+            o = after ? B : A;
+        } else {
+            float3 c1 = after ? chromaAt(p_ToTexR, p_ToTexG, p_ToTexB, x, y, W, H, off) : chromaAt(p_FromTexR, p_FromTexG, p_FromTexB, x, y, W, H, off);
+            float3 c2 = after ? chromaAt(p_ToTexR, p_ToTexG, p_ToTexB, x + (int)(off / 2), y, W, H, off) : chromaAt(p_FromTexR, p_FromTexG, p_FromTexB, x + (int)(off / 2), y, W, H, off);
+            o = make_float3(0.5f * (c1.x + c2.x), 0.5f * (c1.y + c2.y), 0.5f * (c1.z + c2.z));
+            g = env;
+        }
+    } else if (style == 3) {
+        float env = 1.0f - _fabs(2.0f * p - 1.0f);
+        float k = sstep(0.0f, 1.0f, env * 1.6f) * amt;
+        int after = p >= 0.5f ? 1 : 0;
+        o = after ? B : A;
+        if (k > 0.0f) {
+            int band = (int)(y / ((int)(bp / 4) + 1));
+            int dx = rnd3(band, 9, sd + 51u + (uint)(p * 97.0f)) < 0.25f * k ? (int)((rnd3(band, 10, sd + 52u) - 0.5f) * 2.0f * shiftMax * k) : 0;
+            float3 c = after ? rgbAt(p_ToTexR, p_ToTexG, p_ToTexB, x + dx, y, W, H) : rgbAt(p_FromTexR, p_FromTexG, p_FromTexB, x + dx, y, W, H);
+            uint fz = (uint)(p * 997.0f);
+            float n = rnd3(gx, gy,sd + fz * 3u), nr = rnd3(gx, gy,sd + fz * 3u + 1u);
+            float s = 0.85f * gtStatic / 60.0f * k;
+            float L = luma(c.x, c.y, c.z);
+            float sw = 1.8f * _saturatef(s) * (0.25f + 0.75f * L);
+            o = make_float3(c.x + (n - 0.5f + 0.15f * (nr - 0.5f)) * sw, c.y + (n - 0.5f) * sw, c.z + (n - 0.5f - 0.15f * (nr - 0.5f)) * sw);
+            g = k;
+        }
+    } else if (style == 4) {
+        float env = 1.0f - _fabs(2.0f * p - 1.0f);
+        float e2 = env * env * amt;
+        int after = p >= 0.5f ? 1 : 0;
+        o = after ? B : A;
+        if (e2 > 0.0f) {
+            float roll = e2 * (float)(H) * (0.35f + 0.5f * rnd3(1, 1, sd + 61u));
+            float yy = _fmod((float)(y) + roll + 4.32f * (float)(H), (float)(H) * 1.08f);
+            float skew = (float)(y) / (float)(H) * e2 * shiftMax * 0.6f;
+            int sy = (int)(yy), sx = x + (int)(skew);
+            if (yy >= (float)(H)) {
+                o = make_float3(0.02f, 0.02f, 0.025f);
+            } else {
+                float3 c = after ? rgbAt(p_ToTexR, p_ToTexG, p_ToTexB, sx, sy, W, H) : rgbAt(p_FromTexR, p_FromTexG, p_FromTexB, sx, sy, W, H);
+                float L = luma(c.x, c.y, c.z);
+                float n = rnd3(gx, gy, sd + 62u + (uint)(p * 991.0f));
+                float sw = 1.8f * sstep(0.3f, 1.0f, env) * amt * (0.25f + 0.75f * L);
+                float pulse = 1.0f + 0.25f * e2;
+                o = make_float3((c.x + (n - 0.5f) * sw) * pulse, (c.y + (n - 0.5f) * sw) * pulse, (c.z + (n - 0.5f) * sw) * pulse);
+            }
+            g = e2;
+        }
+    } else {
+        int nb = (int)(gtHits + 0.5f);
+        int beat = (int)(p * (float)(nb));
+        if (beat > nb - 1) beat = nb - 1;
+        float h = beat == (int)(nb / 2) ? 1.0f : (rnd3(beat, 5, sd + 71u) < 0.5f ? 0.35f + 0.5f * rnd3(beat, 6, sd + 72u) : 0.0f);
+        h *= sstep(0.0f, 0.06f, p) * sstep(0.0f, 0.06f, 1.0f - p) * amt;
+        int after = p >= 0.5f ? 1 : 0;
+        o = after ? B : A;
+        if (h > 0.0f) {
+            int bq = (int)(8.0f * sc * (1.0f + gtBlock / 50.0f)) + 1;
+            int bx = (int)(x / bq), by = (int)(y / bq);
+            if (rnd3(bx, by, sd + 73u + (uint)(beat) * 3u) < 0.25f + 0.6f * h) {
+                int x0 = bx * bq, y0 = by * bq;
+                float sr = 0.0f, sg = 0.0f, sb = 0.0f, lr = 0.0f, rr = 0.0f, tp = 0.0f, bt = 0.0f;
+                for (int j = 0; j < 4; j++) {
+                    for (int i = 0; i < 4; i++) {
+                        int qx = x0 + (int)(((float)(i) + 0.5f) * (float)(bq) / 4.0f), qy = y0 + (int)(((float)(j) + 0.5f) * (float)(bq) / 4.0f);
+                        float3 s = after ? rgbAt(p_ToTexR, p_ToTexG, p_ToTexB, qx, qy, W, H) : rgbAt(p_FromTexR, p_FromTexG, p_FromTexB, qx, qy, W, H);
+                        float ls = luma(s.x, s.y, s.z);
+                        sr += s.x; sg += s.y; sb += s.z;
+                        if (i < 2) lr += ls; else rr += ls;
+                        if (j < 2) tp += ls; else bt += ls;
+                    }
+                }
+                float u = ((float)(x - x0) + 0.5f) / (float)(bq) - 0.5f, v = ((float)(y - y0) + 0.5f) / (float)(bq) - 0.5f;
+                float slope = ((rr - lr) * u + (bt - tp) * v) / 8.0f;
+                float lv = 3.0f + 5.0f * (1.0f - h);
+                o = make_float3(_floorf(_saturatef(sr / 16.0f + slope) * lv + 0.5f) / lv, _floorf(_saturatef(sg / 16.0f + slope) * lv + 0.5f) / lv, _floorf(_saturatef(sb / 16.0f + slope) * lv + 0.5f) / lv);
+            }
+            g = h;
+        }
+    }
+    o = gritFinish(o, x, y, H, g, gtGrit / 100.0f, gtDither / 100.0f, sd + (uint)(p * 991.0f) * 5u + 7u);
+    return make_float4(_saturatef(o.x), _saturatef(o.y), _saturatef(o.z), 1.0f);
+}

@@ -1,0 +1,5 @@
+{
+  "env": {
+    "HYPERFRAMES_NO_TELEMETRY": "1"
+  }
+}

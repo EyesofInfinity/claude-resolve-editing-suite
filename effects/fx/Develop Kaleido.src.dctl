@@ -1,0 +1,74 @@
+// Develop Kaleido: kaleidoscopes and tiled mirrors in one DCTL:
+//   0 Radial: Slices mirrored pie slices about the centre, turning by Spin
+//   1 Mirror Tiles: the frame folded into mirrored square tiles of Cell size
+//   2 Fly's Eye: hexagon cells, each holding a small whole copy of the picture seen from its own place
+//   3 Tile Scramble: square cells showing their neighbours' picture, rearranged on every beat (Beat a second)
+// Mix blends it with the picture. Moves by TIMELINE_FRAME_INDEX (Spin, the beats): run it as an OpenFX DCTL effect
+// or a DCTL plugin node. MIT License.
+
+DEFINE_UI_PARAMS(kdMode,   Mode,       DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 3.0, 1.0)
+DEFINE_UI_PARAMS(kdMix,    Mix,        DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(kdSlices, Slices,     DCTLUI_SLIDER_FLOAT, 6.0, 2.0, 16.0, 1.0)
+DEFINE_UI_PARAMS(kdSpin,   Spin,       DCTLUI_SLIDER_FLOAT, 8.0, -90.0, 90.0, 1.0)
+DEFINE_UI_PARAMS(kdCell,   Cell,       DCTLUI_SLIDER_FLOAT, 30.0, 2.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(kdBeat,   Beat,       DCTLUI_SLIDER_FLOAT, 2.0, 0.0, 12.0, 0.5)
+DEFINE_UI_PARAMS(kdSeed,   Seed,       DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Mode, "0 Radial, 1 Mirror Tiles, 2 Fly's Eye, 3 Tile Scramble")
+DEFINE_UI_TOOLTIP(Spin, "Degrees a second the radial kaleidoscope turns")
+DEFINE_UI_TOOLTIP(Cell, "Tile or cell size, percent of the frame height / 2")
+
+#include "../light/light.h"
+#include "../glitch/glitch.h"
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (kdMix <= 0.0f) return c0;
+    int mode = (int)(kdMode + 0.5f);
+    float t = (float)(TIMELINE_FRAME_INDEX) / 24.0f;
+    float hw = 0.5f * (float)(W), hh = 0.5f * (float)(H);
+    float u = (float)(x) + 0.5f - hw, v = (float)(y) + 0.5f - hh;
+    float cs = (0.02f + 0.5f * kdCell / 100.0f) * (float)(H);
+    float sx = (float)(x), sy = (float)(y);
+    int border = 0;
+    if (mode == 0) {
+        float n = _floorf(kdSlices + 0.5f);
+        float seg = 6.2831853f / n;
+        float a = _atan2f(v, u) + kdSpin * 0.0174533f * t;
+        float rad = _sqrtf(u * u + v * v);
+        a = _fmod(a, seg);
+        if (a < 0.0f) a += seg;
+        if (a > 0.5f * seg) a = seg - a;
+        sx = hw + rad * _cosf(a) * 0.9f; sy = hh + rad * _sinf(a) * 0.9f;
+    } else if (mode == 1) {
+        float qx = (u + 1000.0f * cs) / cs, qy = (v + 1000.0f * cs) / cs;
+        int ix = (int)(qx), iy = (int)(qy);
+        float fx = qx - (float)(ix), fy = qy - (float)(iy);
+        if (ix % 2 == 1) fx = 1.0f - fx;
+        if (iy % 2 == 1) fy = 1.0f - fy;
+        sx = hw + (fx - 0.5f) * cs * 2.0f; sy = hh + (fy - 0.5f) * cs * 2.0f;
+    } else if (mode == 2) {
+        float q = (0.57735027f * u - 0.33333333f * v) / cs, r = (0.66666667f * v) / cs;
+        float cx3 = q, cz = r, cy3 = -q - r;
+        float rx = _floorf(cx3 + 0.5f), ry = _floorf(cy3 + 0.5f), rz = _floorf(cz + 0.5f);
+        float dxq = _fabs(rx - cx3), dyq = _fabs(ry - cy3), dzq = _fabs(rz - cz);
+        if (dxq > dyq && dxq > dzq) rx = -ry - rz; else if (dyq > dzq) ry = -rx - rz; else rz = -rx - ry;
+        float ccx = cs * (1.7320508f * rx + 0.8660254f * rz), ccy = cs * 1.5f * rz;
+        float lu = (u - ccx) / cs, lv = (v - ccy) / cs;
+        sx = hw + ccx * 0.35f + lu * hh * 0.9f; sy = hh + ccy * 0.35f + lv * hh * 0.9f;
+        float edge = _fmaxf(_fabs(lv), _fabs(0.8660254f * lu) + 0.5f * _fabs(lv));
+        if (edge > 0.93f) border = 1;
+    } else {
+        float qx = (u + 1000.0f * cs) / cs, qy = (v + 1000.0f * cs) / cs;
+        int ix = (int)(qx), iy = (int)(qy);
+        uint beat = kdBeat > 0.0f ? (uint)(t * kdBeat) : 0u;
+        uint sd = (uint)(kdSeed) * 131u + beat * 7u + 1u;
+        int ox = (int)(hash01((uint)(ix), (uint)(iy), sd) * 5.0f) - 2, oy = (int)(hash01((uint)(ix), (uint)(iy), sd + 1u) * 5.0f) - 2;
+        sx = (float)(x) + (float)(ox) * cs; sy = (float)(y) + (float)(oy) * cs;
+    }
+    float3 o = border ? make_float3(0.02f, 0.02f, 0.03f) : rgbAt(p_TexR, p_TexG, p_TexB, (int)(sx), (int)(sy), W, H);
+    float m = kdMix / 100.0f;
+    return make_float3(lerp1(c0.x, o.x, m), lerp1(c0.y, o.y, m), lerp1(c0.z, o.z, m));
+}

@@ -1,0 +1,198 @@
+// Develop Film Dissolve: film and television hand-overs in one Transition DCTL. Lay it on a cut from Edit page >
+// OpenFX > Transition > ResolveFX Color > DCTL and pick
+// this file. Style:
+//   0 Film Dissolve: the optical printer's dissolve. The printer exposes the outgoing shot onto the dupe fading out,
+//     winds back, and exposes the incoming fading in, so the two add as exposure on the negative and the print's curve
+//     (its toe and its shoulder) makes the picture. A highlight given half its light drops a little on the shoulder,
+//     where a video dissolve takes it halfway to grey; the blacks stay down in the toe. Highlight Hold sets the curve
+//     (0 is a dissolve in linear light). Grain rises in the dissolve, as an optical's dupe generation shows.
+//   1 Film Roll: the projector loses its loop and the film slips through the gate. The frames roll by with the black
+//     frame line between them, streaked by the strip's speed while the shutter is open, weaving in the gate and
+//     flickering, until the incoming shot's frame settles in the gate. Frames: how many frame lines roll by.
+//   2 TV Roll: the set loses sync as the channel changes. The vertical hold goes: the picture rolls with its black
+//     blanking bar, faster and faster; the horizontal hold goes with it, the lines slipping sideways into diagonal bands
+//     with the blanking edge running through them and the top of the picture bending; colour drops out and snow
+//     comes up over the change; then the incoming station rolls in and locks.
+// TRANSITION_PROGRESS runs it; it starts exactly on the outgoing shot and ends exactly on the incoming. MIT License.
+
+DEFINE_UI_PARAMS(fdStyle,   Style,          DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 2.0, 1.0)
+DEFINE_UI_PARAMS(fdHold,    Highlight Hold, DCTLUI_SLIDER_FLOAT, 70.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fdFrames,  Frames,         DCTLUI_SLIDER_FLOAT, 1.0, 1.0, 4.0, 1.0)
+DEFINE_UI_PARAMS(fdDir,     Direction,      DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 1.0)
+DEFINE_UI_PARAMS(fdBar,     Frame Line,     DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fdBlur,    Motion Blur,    DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fdWeave,   Weave,          DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fdFlicker, Flicker,        DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fdGrain,   Grain,          DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fdTear,    Sync Tear,      DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fdSnow,    Snow,           DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fdSeed,    Seed,           DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Style, "0 Film Dissolve, 1 Film Roll, 2 TV Roll")
+DEFINE_UI_TOOLTIP(Highlight Hold, "Film Dissolve: how far the brights hold through the dissolve; 0 is a dissolve in linear light")
+DEFINE_UI_TOOLTIP(Frames, "Film Roll: frame lines that roll by; TV Roll: how many times the picture rolls each side of the change")
+DEFINE_UI_TOOLTIP(Direction, "0 the picture rolls up, 1 down")
+DEFINE_UI_TOOLTIP(Frame Line, "The black bar between frames (film) or the blanking bar (TV)")
+DEFINE_UI_TOOLTIP(Sync Tear, "TV Roll: how far the lines slip sideways when the horizontal hold goes")
+
+#include "../lens/lens.h"
+
+__DEVICE__ float printF(float E, float k, float tau)
+{
+    float u = k < 0.001f ? E : (1.0f - _expf(-k * E)) / (1.0f - _expf(-k));
+    return tau <= 0.0f ? u : u * u / (u + tau) * (1.0f + tau);
+}
+
+__DEVICE__ float exposureF(float v, float k, float tau)
+{
+    float y = _saturatef(v), u = y;
+    if (tau > 0.0f) {
+        float a = y / (1.0f + tau);
+        u = 0.5f * (a + _sqrtf(a * a + 4.0f * a * tau));
+    }
+    if (k < 0.001f) return u;
+    return -_logf(_fmaxf(1.0f - u * (1.0f - _expf(-k)), 1e-7f)) / k;
+}
+
+__DEVICE__ float3 grainF(float3 c, int x, int y, float sc, float amt, float tz, uint seed)
+{
+    if (amt <= 0.0f) return c;
+    float cs = 1.4f * sc;
+    float n = vnoise3((float)(x) / cs + 4096.0f, (float)(y) / cs + 4096.0f, tz + 4096.0f, seed) - 0.5f;
+    float m = vnoise3((float)(x) / cs + 5096.0f, (float)(y) / cs + 4096.0f, tz + 4096.0f, seed + 9u) - 0.5f;
+    float L = luma(_saturatef(c.x), _saturatef(c.y), _saturatef(c.z));
+    float k = amt * 0.16f * (0.25f + 3.0f * L * (1.0f - L));
+    return make_float3(_saturatef(c.x + k * (n + 0.25f * m)), _saturatef(c.y + k * n), _saturatef(c.z + k * (n - 0.25f * m)));
+}
+
+__DEVICE__ float barF(float z, float pitch, float hh, float e)
+{
+    float k = _floorf(z / pitch), yy = z - k * pitch;
+    float sd = yy >= hh ? _fminf(yy - hh, pitch - yy) : -_fminf(hh - yy, yy);
+    return sstep(-e, e, sd);
+}
+
+__DEVICE__ float3 stripF(__TEXTURE__ ar, __TEXTURE__ ag, __TEXTURE__ ab, __TEXTURE__ br, __TEXTURE__ bg, __TEXTURE__ bb,
+                         float fx, float z, float pitch, int n, int down, int W, int H, float e)
+{
+    float hh = (float)(H);
+    float k = _floorf(z / pitch), yy = z - k * pitch;
+    int ki = (int)(k);
+    int isB = down == 1 ? (ki <= -n ? 1 : 0) : (ki >= n ? 1 : 0);
+    float fy = _fminf(yy, hh - 1.0f);
+    float3 c = isB == 1 ? linL(br, bg, bb, fx, fy, W, H) : linL(ar, ag, ab, fx, fy, W, H);
+    float bar = barF(z, pitch, hh, e);
+    return make_float3(c.x * (1.0f - bar), c.y * (1.0f - bar), c.z * (1.0f - bar));
+}
+
+__DEVICE__ float slipF(float yy, float hh, float W, float tear, float jit)
+{
+    float skew = tear * tear * 3.0f * W * (yy / hh);
+    float bend = tear * 0.07f * W * _expf(-yy / (0.05f * hh));
+    return skew + bend + jit;
+}
+
+__DEVICE__ float4 transition(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_FromTexR, __TEXTURE__ p_FromTexG, __TEXTURE__ p_FromTexB, __TEXTURE__ p_FromTexA, __TEXTURE__ p_ToTexR, __TEXTURE__ p_ToTexG, __TEXTURE__ p_ToTexB, __TEXTURE__ p_ToTexA)
+{
+    float p = _saturatef(TRANSITION_PROGRESS);
+    float da = _tex2D(p_FromTexR, p_X, p_Y), dg = _tex2D(p_FromTexG, p_X, p_Y), db = _tex2D(p_FromTexB, p_X, p_Y);
+    float ea = _tex2D(p_ToTexR, p_X, p_Y), eg = _tex2D(p_ToTexG, p_X, p_Y), eb = _tex2D(p_ToTexB, p_X, p_Y);
+    if (p <= 0.0f) return make_float4(da, dg, db, 1.0f);
+    if (p >= 1.0f) return make_float4(ea, eg, eb, 1.0f);
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float hh = (float)(H), ww = (float)(W), sc = hh / 1080.0f;
+    int st = (int)(fdStyle + 0.5f);
+    uint seed = (uint)(fdSeed) * 131u + 17u;
+    int n = (int)(fdFrames + 0.5f);
+    int down = fdDir > 0.5f ? 1 : 0;
+    float taper = sstep(0.0f, 0.12f, p) * sstep(0.0f, 0.12f, 1.0f - p);
+    float sn = _sinf(3.1415927f * p), env = sn * sn * taper;
+    float grain = fdGrain / 100.0f;
+    float tz = p * 150.0f;
+    float3 o;
+
+    if (st == 0) {
+        float hold = fdHold / 100.0f;
+        float k = 7.0f * hold, tau = 0.03f * hold;
+        float p3 = p * p * p, q3 = (1.0f - p) * (1.0f - p) * (1.0f - p);
+        float t = p3 / (p3 + q3);
+        float r = printF((1.0f - t) * exposureF(toLin(da), k, tau) + t * exposureF(toLin(ea), k, tau), k, tau);
+        float g = printF((1.0f - t) * exposureF(toLin(dg), k, tau) + t * exposureF(toLin(eg), k, tau), k, tau);
+        float b = printF((1.0f - t) * exposureF(toLin(db), k, tau) + t * exposureF(toLin(eb), k, tau), k, tau);
+        o = make_float3(_saturatef(toDisp(r)), _saturatef(toDisp(g)), _saturatef(toDisp(b)));
+        o = grainF(o, x, y, sc, grain * sstep(0.0f, 0.15f, p) * sstep(0.0f, 0.15f, 1.0f - p), tz, seed);
+        return make_float4(o.x, o.y, o.z, 1.0f);
+    }
+
+    float fx = (float)(x), fy = (float)(y);
+    if (st == 1) {
+        float pitch = hh * (1.0f + 0.16f * fdBar / 100.0f);
+        float s = fade(p), v = 30.0f * p * p * (1.0f - p) * (1.0f - p);
+        float run = (float)(n) * pitch;
+        float z0 = down == 1 ? fy - s * run : fy + s * run;
+        float streak = fdBlur / 100.0f * v * run / 24.0f * 0.5f;
+        float wv = fdWeave / 100.0f * env;
+        float ox = wv * 0.012f * ww * (vnoise3(p * 18.0f + 100.0f, 3.5f, 0.5f, seed + 1u) - 0.5f) * 2.0f;
+        float oy = wv * 0.02f * hh * (vnoise3(p * 23.0f + 200.0f, 7.5f, 0.5f, seed + 2u) - 0.5f) * 2.0f;
+        float e = _fmaxf(1.2f * sc, 0.75f);
+        float r = 0.0f, g = 0.0f, b = 0.0f;
+        int nt = (int)(_fminf(streak / (1.5f * sc), 31.0f)) + 1;
+        float jt = hash01((uint)(x) + 4096u, (uint)(y) + 4096u, seed + 3u);
+        for (int i = 0; i < 32; i++) {
+            if (i >= nt) break;
+            float dz = nt == 1 ? 0.0f : streak * (((float)(i) + jt) / (float)(nt) - 0.5f);
+            float3 c = stripF(p_FromTexR, p_FromTexG, p_FromTexB, p_ToTexR, p_ToTexG, p_ToTexB, fx + ox, z0 + oy + dz, pitch, n, down, W, H, e);
+            r += c.x; g += c.y; b += c.z;
+        }
+        r /= (float)(nt); g /= (float)(nt); b /= (float)(nt);
+        float fl = fdFlicker / 100.0f * env;
+        float ex = 1.0f + fl * 0.7f * (vnoise3(p * 60.0f + 300.0f, 1.5f, 0.5f, seed + 4u) - 0.5f) * 2.0f - 0.15f * fl;
+        o = make_float3(_saturatef(toDisp(r * ex)), _saturatef(toDisp(g * ex)), _saturatef(toDisp(b * ex)));
+        o = grainF(o, x, y, sc, grain * env, tz, seed + 5u);
+        return make_float4(o.x, o.y, o.z, 1.0f);
+    }
+
+    float pitch = hh * (1.0f + 0.16f * fdBar / 100.0f);
+    int isB = p >= 0.5f ? 1 : 0;
+    float ra = sstep(0.0f, 0.5f, p), rb = sstep(0.0f, 0.5f, 1.0f - p);
+    float roll = isB == 1 ? -(float)(n) * rb * rb * rb : (float)(n) * ra * ra * ra;
+    if (down == 1) roll = -roll;
+    float z = fy + roll * pitch;
+    float kf = _floorf(z / pitch), yy = z - kf * pitch;
+    float bar = barF(z, pitch, hh, _fmaxf(1.5f * sc, 0.75f));
+    float hold = sstep(0.1f, 0.5f, p) * sstep(0.1f, 0.5f, 1.0f - p);
+    float tear = fdTear / 100.0f * hold * taper;
+    int line = (int)(_floorf(yy));
+    float jit = tear * 6.0f * sc * (vnoise3((float)(line) * 0.7f + 4096.0f, tz * 2.0f + 4096.0f, 0.5f, seed + 6u) - 0.5f) * 2.0f;
+    float span = ww * 1.17f;
+    float xs = fx - slipF(yy, hh, ww, tear, jit);
+    xs = xs - span * _floorf(xs / span);
+    float hb = sstep(ww - 1.5f * sc, ww + 1.5f * sc, xs) * (1.0f - sstep(span - 1.5f * sc, span, xs));
+    float yr = _fminf(yy, hh - 1.0f), xr = _fminf(xs, ww - 1.0f);
+    float3 c = isB == 1 ? bilL(p_ToTexR, p_ToTexG, p_ToTexB, xr, yr, W, H) : bilL(p_FromTexR, p_FromTexG, p_FromTexB, xr, yr, W, H);
+    float L = luma(c.x, c.y, c.z), ck = 0.85f * env;
+    c = make_float3(lerp1(c.x, L, ck), lerp1(c.y, L, ck), lerp1(c.z, L, ck));
+    float vis = (1.0f - bar) * (1.0f - hb);
+    c = make_float3(c.x * vis, c.y * vis, c.z * vis);
+    float sw = fdSnow / 100.0f * sstep(0.18f, 0.5f, p) * sstep(0.18f, 0.5f, 1.0f - p);
+    if (sw > 0.0f) {
+        float nz = vnoise3(fx / (2.5f * sc) + 4096.0f, fy + 4096.0f + 0.5f, tz * 3.0f + 4096.0f, seed + 7u);
+        float nz2 = vnoise3(fx / (1.2f * sc) + 6096.0f, fy + 4096.0f + 0.5f, tz * 3.0f + 4096.0f, seed + 8u);
+        float sv = _saturatef(0.45f + 2.6f * (0.65f * nz + 0.35f * nz2 - 0.5f));
+        float k = 0.85f * sw;
+        float cm = 0.5f * (1.0f - k);
+        c = make_float3(lerp1(c.x * (1.0f - cm) + 0.05f * cm, sv, k), lerp1(c.y * (1.0f - cm) + 0.05f * cm, sv, k), lerp1(c.z * (1.0f - cm) + 0.05f * cm, sv, k));
+    }
+    float pl = _fmaxf(3.0f * sc, 2.0f);
+    float scan = 1.0f - 0.28f * env * (0.5f + 0.5f * _cosf(6.2831853f * (fy + 0.5f) / pl));
+    o = make_float3(_saturatef(c.x * scan), _saturatef(c.y * scan), _saturatef(c.z * scan));
+    float wcut = sstep(0.47f, 0.53f, p);
+    if (wcut > 0.0f && wcut < 1.0f) {
+        float3 c2 = isB == 1 ? bilL(p_FromTexR, p_FromTexG, p_FromTexB, xr, yr, W, H) : bilL(p_ToTexR, p_ToTexG, p_ToTexB, xr, yr, W, H);
+        float L2 = luma(c2.x, c2.y, c2.z);
+        c2 = make_float3(lerp1(c2.x, L2, ck) * vis * scan, lerp1(c2.y, L2, ck) * vis * scan, lerp1(c2.z, L2, ck) * vis * scan);
+        float wm = isB == 1 ? 1.0f - wcut : wcut;
+        o = make_float3(lerp1(o.x, _saturatef(c2.x), wm * (1.0f - 0.85f * sw)), lerp1(o.y, _saturatef(c2.y), wm * (1.0f - 0.85f * sw)), lerp1(o.z, _saturatef(c2.z), wm * (1.0f - 0.85f * sw)));
+    }
+    return make_float4(o.x, o.y, o.z, 1.0f);
+}

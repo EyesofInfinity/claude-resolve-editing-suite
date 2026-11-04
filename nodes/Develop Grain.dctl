@@ -1,0 +1,82 @@
+// Develop Grain: film grain that changes every frame. The last node of a Develop template,
+// run as a ResolveFX DCTL plugin node so TIMELINE_FRAME_INDEX is live; as a LUT the frame index is fixed and
+// the grain freezes. Rec.709 gamma 2.4 in and out.
+// The field: three octaves of value noise at sigma 0.55, 1.2 and 2.6 px (weights 0.55, 0.33, 0.12), each
+// normalised to unit variance so no lattice shows, red 1.05x and blue 1.15x larger; a shared mono field mixed
+// with one per channel by Film Grain Colour; clumped by a slow field (Roughness). It moves exposure in stops:
+// out = in x 2^(amount x tone weight x field), the tone weight three bands centred 3.5 stops under, 0.5 under
+// and 2.5 over middle grey (width 1.6 stops), so the lower mids carry the most and pure black stays black.
+// Film Grain 40 is about 0.07 stops RMS in the mids. MIT License.
+
+DEFINE_UI_PARAMS(filmGrain,  Film Grain,            DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(filmSize,   Film Grain Size,       DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(filmColour, Film Grain Colour,     DCTLUI_SLIDER_FLOAT, 35.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(filmRough,  Film Grain Roughness,  DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(filmShad,   Film Grain Shadows,    DCTLUI_SLIDER_FLOAT, 55.0, 0.0, 200.0, 1.0)
+DEFINE_UI_PARAMS(filmMid,    Film Grain Midtones,   DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 200.0, 1.0)
+DEFINE_UI_PARAMS(filmHigh,   Film Grain Highlights, DCTLUI_SLIDER_FLOAT, 35.0, 0.0, 200.0, 1.0)
+DEFINE_UI_PARAMS(filmSeed,   Film Grain Seed,       DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Film Grain Size, "50 is 35 mm; 0 is finer (65 mm), 100 coarser (8 mm)")
+DEFINE_UI_TOOLTIP(Film Grain Colour, "0 is grain in brightness only; 100 is a separate grain in each colour")
+
+__DEVICE__ float luma(float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; }
+__DEVICE__ float toLin(float x) { return _powf(_fmaxf(x, 0.0f), 2.4f); }
+__DEVICE__ float toDisp(float x) { return _powf(_fmaxf(x, 0.0f), 1.0f / 2.4f); }
+
+__DEVICE__ float hash01(uint x, uint y, uint z)
+{
+    x = x * 1664525u + 1013904223u; y = y * 1664525u + 1013904223u; z = z * 1664525u + 1013904223u;
+    x += y * z; y += z * x; z += x * y;
+    x ^= x >> 16u; y ^= y >> 16u; z ^= z >> 16u;
+    x += y * z; y += z * x; z += x * y;
+    return (float)(x >> 8u) * (1.0f / 16777216.0f);
+}
+
+__DEVICE__ float vnoise(float x, float y, float g, uint ox, uint z)
+{
+    float fx = x / g, fy = y / g;
+    int ix = (int)(fx), iy = (int)(fy);
+    float tx = fx - (float)(ix), ty = fy - (float)(iy);
+    uint x0 = (uint)(ix) + ox, y0 = (uint)(iy);
+    float a = hash01(x0, y0, z) - 0.5f, b = hash01(x0 + 1u, y0, z) - 0.5f;
+    float c = hash01(x0, y0 + 1u, z) - 0.5f, d = hash01(x0 + 1u, y0 + 1u, z) - 0.5f;
+    float w00 = (1.0f - tx) * (1.0f - ty), w10 = tx * (1.0f - ty), w01 = (1.0f - tx) * ty, w11 = tx * ty;
+    float v = a * w00 + b * w10 + c * w01 + d * w11;
+    float n = _sqrtf(w00 * w00 + w10 * w10 + w01 * w01 + w11 * w11);
+    return v / n * 3.4641016f;
+}
+
+__DEVICE__ float field(float x, float y, float m, uint ox, uint z)
+{
+    float n = 0.55f * vnoise(x, y, 0.55f * 2.2f * m, ox, z) + 0.33f * vnoise(x, y, 1.2f * 2.2f * m, ox + 7919u, z + 1u)
+            + 0.12f * vnoise(x, y, 2.6f * 2.2f * m, ox + 15838u, z + 2u);
+    return n / 0.6527251f;
+}
+
+__DEVICE__ float band(float yn, float c) { float t = (yn - c) / 1.6f; return _expf(-0.5f * t * t); }
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float r = toLin(_tex2D(p_TexR, p_X, p_Y)), g = toLin(_tex2D(p_TexG, p_X, p_Y)), b = toLin(_tex2D(p_TexB, p_X, p_Y));
+    if (filmGrain <= 0.0f) return make_float3(toDisp(r), toDisp(g), toDisp(b));
+    float s = filmSize / 50.0f - 1.0f;
+    float m = s < 0.0f ? _powf(0.6f, -s) : _powf(2.8f, s);
+    m *= (float)(p_Height) / 1080.0f;
+    uint z = ((uint)(TIMELINE_FRAME_INDEX) + (uint)(filmSeed) * 7919u) * 32u;
+    float x = (float)(p_X) + 0.5f, y = (float)(p_Y) + 0.5f;
+    float mono = field(x, y, m, 0u, z);
+    float nr = field(x, y, m * 1.05f, 100003u, z + 4u);
+    float ng = field(x, y, m, 200003u, z + 8u);
+    float nb = field(x, y, m * 1.15f, 300007u, z + 12u);
+    float rho = 1.0f - filmColour / 100.0f, sm = _sqrtf(rho), si = _sqrtf(1.0f - rho);
+    float clump = _fmaxf(0.0f, 1.0f + 0.3f * filmRough / 100.0f * vnoise(x, y, 14.0f * m, 400009u, z + 16u));
+    float Y = _fmaxf(luma(r, g, b), 1e-6f);
+    float yn = _log2f(Y / 0.18f);
+    float tone = filmShad / 100.0f * band(yn, -3.5f) + filmMid / 100.0f * band(yn, -0.5f) + filmHigh / 100.0f * band(yn, 2.5f);
+    float k = filmGrain / 40.0f * 0.07f * tone * clump;
+    r *= _exp2f(k * (sm * mono + si * nr));
+    g *= _exp2f(k * (sm * mono + si * ng));
+    b *= _exp2f(k * (sm * mono + si * nb));
+    return make_float3(_saturatef(toDisp(r)), _saturatef(toDisp(g)), _saturatef(toDisp(b)));
+}

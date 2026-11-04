@@ -1,0 +1,210 @@
+// Develop Filter: camera filters and lighting gels as one-click looks, in one transform DCTL. Each filter is its
+// transmission across the spectrum, laid on the light: every linear pixel is read as a surface under daylight
+// (spectra.h, written by spectra.py), seen through the filter wavelength by wavelength and integrated back into
+// linear Rec.709, so a filter is never a tint: a red filter passes red light and holds back the rest, whatever colour
+// the picture is. Exposure is opened by the filter's factor as a camera operator would (at most 2.6 stops, and only
+// so far that white through the filter stays near white in its strongest channel), so the picture keeps its
+// brightness and takes the filter's colour. Strength is the filter's thickness (200 is two stacked).
+//    0 to 7  colour conversion and light balancing filters by their standard numbers, each the ratio of two black
+//            bodies a mired shift apart, as they are specified: 85 amber (+112), 85B (+131), 80A blue (-131), 80B
+//            (-112), 81A (+18), 81EF (+52), 82A (-18), 82C (-45).
+//    8 to 17 black and white contrast filters, the filter then a panchromatic film's spectral response and a gentle
+//            print curve: 8 pan film alone, then the numbered filters 8 yellow, 11 yellow-green, 15 deep yellow, 21
+//            orange, 23A light red, 25 red, 29 deep red, 47 blue, 58 green, each from its published cut-on wavelength
+//            and edge.
+//   18 to 27 lighting gels laid on the lens: full CTO (+159 mireds), half CTO (+81), full CTB (-137), plus green,
+//            minus green, pale amber, deep violet (with its red leak), primary red, moon blue, steel blue.
+//   28 Polarizer: skylight is polarized most at 90 degrees from the sun (Rayleigh: degree 0.75 sin^2 / (1 + cos^2));
+//      the Rayleigh share of each pixel (the part with skylight's colour) is cut by that degree for the direction the
+//      pixel looks, from Sun Azimuth, Sun Height, Lens Angle and Horizon, so a wide lens shows the darker band; white
+//      haze and clouds pass, so the sky deepens and the clouds stand out. Glare Cut takes back part of the white sheen
+//      on coloured surfaces (leaves, water), so they go deeper and more saturated. Turn rotates the filter: 0 the
+//      strongest, 45 none, 90 the reverse.
+//   29 Graduated ND: the frame above Grad Line loses Grad Stops, across a soft or hard transition, turned by Angle;
+//      Grad Colour 0 neutral, 1 tobacco, 2 blue, 3 sunset (the density's colour spectral, its weight in stops).
+//   30 Reverse graduated ND: densest at the line, lighter toward the top, for a sun on the horizon.
+// Film: 0 the filter's own (8 to 17 black and white, the rest colour), 1 colour, 2 black and white.
+// Amount mixes with the picture in display terms; Amount 0 is the input exactly. MIT License.
+
+DEFINE_UI_PARAMS(fiAmount,   Filter Mix,     DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fiFilter,   Filter,         DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 30.0, 1.0)
+DEFINE_UI_PARAMS(fiStrength, Strength,       DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 200.0, 1.0)
+DEFINE_UI_PARAMS(fiFilm,     Film,           DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 2.0, 1.0)
+DEFINE_UI_PARAMS(fiPos,      Grad Line,      DCTLUI_SLIDER_FLOAT, 45.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fiAngle,    Grad Angle,     DCTLUI_SLIDER_FLOAT, 0.0, -90.0, 90.0, 1.0)
+DEFINE_UI_PARAMS(fiSoft,     Grad Softness,  DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fiStops,    Grad Stops,     DCTLUI_SLIDER_FLOAT, 2.0, 0.0, 4.0, 0.1)
+DEFINE_UI_PARAMS(fiGradCol,  Grad Colour,    DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 3.0, 1.0)
+DEFINE_UI_PARAMS(fiSunAz,    Sun Azimuth,    DCTLUI_SLIDER_FLOAT, 90.0, -180.0, 180.0, 1.0)
+DEFINE_UI_PARAMS(fiSunEl,    Sun Height,     DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 90.0, 1.0)
+DEFINE_UI_PARAMS(fiFov,      Lens Angle,     DCTLUI_SLIDER_FLOAT, 65.0, 20.0, 120.0, 1.0)
+DEFINE_UI_PARAMS(fiHorizon,  Horizon,        DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(fiTurn,     Turn,           DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 90.0, 1.0)
+DEFINE_UI_PARAMS(fiGlare,    Glare Cut,      DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Filter, "0-7 colour filters 85 85B 80A 80B 81A 81EF 82A 82C; 8-17 B&W pan, 8 11 15 21 23A 25 29 47 58; 18-27 gels CTO, 1/2 CTO, CTB, plus green, minus green, pale amber, deep violet, primary red, moon blue, steel blue; 28 polarizer; 29 grad ND; 30 reverse grad ND")
+DEFINE_UI_TOOLTIP(Strength, "The filter's thickness: 100 one filter, 200 two stacked, 0 clear glass")
+DEFINE_UI_TOOLTIP(Film, "0 the filter's own (B&W for 8-17), 1 colour, 2 black and white")
+DEFINE_UI_TOOLTIP(Grad Line, "Where the grad's transition sits, 0 the top of the frame, 100 the bottom")
+DEFINE_UI_TOOLTIP(Grad Colour, "0 neutral, 1 tobacco, 2 blue, 3 sunset")
+DEFINE_UI_TOOLTIP(Sun Azimuth, "Polarizer: the sun round the horizon from where the camera looks, 90 to the right, 180 behind")
+DEFINE_UI_TOOLTIP(Horizon, "Polarizer: where the horizon sits in the frame, 0 the top")
+DEFINE_UI_TOOLTIP(Turn, "Polarizer: 0 darkest sky, 45 no effect, 90 the reverse")
+
+#include "../stock/stock.h"
+#include "spectra.h"
+
+__DEVICE__ float sigm(float v) { return 1.0f / (1.0f + _expf(-v)); }
+
+__DEVICE__ float lpD(float lam, float l50, float w, float tmin, float tmax) { return -_logf(tmin + (tmax - tmin) * sigm((lam - l50) / w)); }
+
+__DEVICE__ float miredD(float lam, float mired) { return 14.388f * mired * (1.0f / lam - 1.0f / (mired > 0.0f ? 720.0f : 380.0f)); }
+
+__DEVICE__ float filterD(int f, float lam)
+{
+    float g = 0.0f;
+    if (f == 0) return miredD(lam, 112.0f);
+    if (f == 1) return miredD(lam, 131.0f);
+    if (f == 2) return miredD(lam, -131.0f);
+    if (f == 3) return miredD(lam, -112.0f);
+    if (f == 4) return miredD(lam, 18.0f);
+    if (f == 5) return miredD(lam, 52.0f);
+    if (f == 6) return miredD(lam, -18.0f);
+    if (f == 7) return miredD(lam, -45.0f);
+    if (f == 8) return 0.0f;
+    if (f == 9) return lpD(lam, 475.0f, 8.0f, 0.02f, 0.92f);
+    if (f == 10) return lpD(lam, 482.0f, 9.0f, 0.03f, 0.85f) - _logf(0.30f + 0.70f * (1.0f - sigm((lam - 596.0f) / 20.0f)));
+    if (f == 11) return lpD(lam, 522.0f, 7.0f, 0.005f, 0.92f);
+    if (f == 12) return lpD(lam, 556.0f, 7.0f, 0.003f, 0.92f);
+    if (f == 13) return lpD(lam, 585.0f, 7.0f, 0.002f, 0.90f);
+    if (f == 14) return lpD(lam, 598.0f, 6.0f, 0.001f, 0.90f);
+    if (f == 15) return lpD(lam, 618.0f, 6.0f, 0.001f, 0.88f);
+    if (f == 16) return -_logf(0.002f + 0.50f * (1.0f - sigm((lam - 490.0f) / 9.0f)) * sigm((lam - 396.0f) / 6.0f));
+    if (f == 17) return -_logf(0.002f + 0.65f * sigm((lam - 497.0f) / 9.0f) * (1.0f - sigm((lam - 588.0f) / 9.0f)));
+    if (f == 18) return miredD(lam, 159.0f);
+    if (f == 19) return miredD(lam, 81.0f);
+    if (f == 20) return miredD(lam, -137.0f);
+    if (f == 21) { g = (lam - 535.0f) / 55.0f; return 0.69f * (1.0f - _expf(-g * g)); }
+    if (f == 22) { g = (lam - 540.0f) / 40.0f; return 0.69f * _expf(-g * g); }
+    if (f == 23) { g = (lam - 520.0f) / 35.0f; return miredD(lam, 55.0f) + 0.18f * _expf(-g * g); }
+    if (f == 24) return -_logf(0.004f + 0.30f * (1.0f - sigm((lam - 475.0f) / 12.0f)) * sigm((lam - 402.0f) / 8.0f) + 0.75f * sigm((lam - 688.0f) / 10.0f));
+    if (f == 25) return lpD(lam, 605.0f, 7.0f, 0.003f, 0.88f);
+    if (f == 26) return -_logf(0.06f + 0.64f * (1.0f - sigm((lam - 545.0f) / 22.0f)));
+    if (f == 27) return -_logf(0.45f + 0.40f * (1.0f - sigm((lam - 585.0f) / 30.0f)));
+    return 0.0f;
+}
+
+__DEVICE__ float gradShape(int c, float lam)
+{
+    if (c == 1) return 0.55f + 1.10f * (1.0f - sigm((lam - 565.0f) / 40.0f));
+    if (c == 2) return 0.35f + 1.30f * sigm((lam - 520.0f) / 30.0f);
+    if (c == 3) { float g = (lam - 545.0f) / 35.0f; return 0.45f + 1.20f * (1.0f - sigm((lam - 585.0f) / 22.0f)) + 0.25f * _expf(-g * g); }
+    return 1.0f;
+}
+
+__DEVICE__ float3 specRow(int f, int gc, float s, float dg, int row)
+{
+    float a = 0.0f, b = 0.0f, c = 0.0f;
+    for (int i = 0; i < 65; i++) {
+        float lam = 390.0f + 5.0f * (float)(i);
+        float d = f >= 0 ? s * filterD(f, lam) : dg * gradShape(gc, lam);
+        float T = _expf(-d);
+        a += T * FSPEC[i * 12 + row * 3]; b += T * FSPEC[i * 12 + row * 3 + 1]; c += T * FSPEC[i * 12 + row * 3 + 2];
+    }
+    return make_float3(a, b, c);
+}
+
+__DEVICE__ float dot3(float3 a, float3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+
+__DEVICE__ float3 polar(float3 l, float3 dir, float3 sd, float kr, float below, float glare, float st, float lcr)
+{
+    float c = dot3(dir, sd), c2 = c * c;
+    float P = 0.75f * (1.0f - c2) / (1.0f + c2);
+    float rr = FRAYL[0], rg = FRAYL[1], rb = FRAYL[2];
+    float r = _fmaxf(l.x, 0.0f), g = _fmaxf(l.y, 0.0f), b = _fmaxf(l.z, 0.0f);
+    float aa = 3.0f, ab = rr + rg + rb, bb = rr * rr + rg * rg + rb * rb;
+    float pa = r + g + b, pb = rr * r + rg * g + rb * b;
+    float det = aa * bb - ab * ab;
+    float w = (bb * pa - ab * pb) / det, s = _fmaxf((aa * pb - ab * pa) / det, 0.0f);
+    float er = r - w - s * rr, eg = g - w - s * rg, eb = b - w - s * rb;
+    float L = _fmaxf(luma(r, g, b), 1e-5f);
+    float fit = 1.0f - sstep(0.12f, 0.40f, _sqrtf(er * er + eg * eg + eb * eb) / L);
+    float cut = P * kr * st * fit * (1.0f - 0.5f * below);
+    cut *= sstep(0.01f, 0.06f, L);
+    float q = _saturatef(s * luma(rr, rg, rb) / L);
+    float3 o = make_float3(r - cut * (0.65f * q * r + 0.35f * s * rr), g - cut * (0.65f * q * g + 0.35f * s * rg), b - cut * (0.65f * q * b + 0.35f * s * rb));
+    float mx = _fmaxf(o.x, _fmaxf(o.y, o.z)), mn = _fminf(o.x, _fminf(o.y, o.z));
+    float sky = s * rb / (mx + 1e-4f) * fit;
+    float gw = sstep(0.15f, 0.5f, lcr) * (1.0f - sstep(0.3f, 0.7f, sky));
+    float gc = 0.6f * glare * kr * st * gw * mn;
+    return make_float3(_fmaxf(o.x - gc, 0.0f), _fmaxf(o.y - gc, 0.0f), _fmaxf(o.z - gc, 0.0f));
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, x, y, W, H);
+    if (fiAmount <= 0.0f) return c0;
+    int f = (int)(fiFilter + 0.5f), film = (int)(fiFilm + 0.5f);
+    float st = fiStrength / 100.0f;
+    int mono = film == 2 || (film == 0 && f >= 8 && f <= 17) ? 1 : 0;
+    float3 l = make_float3(toLin(c0.x), toLin(c0.y), toLin(c0.z));
+    float expo = 1.0f;
+    int sf = f, gc = 0;
+    float dg = 0.0f;
+    if (f == 28) {
+        float fx = ((float)(x) + 0.5f - 0.5f * (float)(W)), fy = ((float)(y) + 0.5f - (float)(H) * fiHorizon / 100.0f);
+        float ha = 0.5f * fiFov * 0.0174533f;
+        float fp = 0.5f * (float)(W) * _cosf(ha) / _sinf(ha);
+        float dn = _sqrtf(fx * fx + fy * fy + fp * fp);
+        float3 dir = make_float3(fx / dn, -fy / dn, fp / dn);
+        float az = fiSunAz * 0.0174533f, el = fiSunEl * 0.0174533f;
+        float3 sd = make_float3(_sinf(az) * _cosf(el), _sinf(el), _cosf(az) * _cosf(el));
+        float tr = fiTurn * 0.0174533f;
+        float kr = 1.0f - 2.0f * _sinf(tr) * _sinf(tr);
+        float below = sstep(0.0f, 0.12f, -dir.y);
+        float rad = 14.0f * (float)(H) / 1080.0f, nr = 0.0f, ng = 0.0f, nb = 0.0f;
+        for (int i = 0; i < 12; i++) {
+            float rr = rad * _sqrtf(((float)(i) + 0.5f) / 12.0f), an = 2.3999632f * (float)(i);
+            float3 q = rgbAt(p_TexR, p_TexG, p_TexB, x + (int)(_round(rr * _cosf(an))), y + (int)(_round(rr * _sinf(an))), W, H);
+            nr += toLin(_saturatef(q.x)); ng += toLin(_saturatef(q.y)); nb += toLin(_saturatef(q.z));
+        }
+        float nmx = _fmaxf(nr, _fmaxf(ng, nb)) + 1e-5f, nmn = _fminf(nr, _fminf(ng, nb));
+        float lcr = (nmx - nmn) / nmx * (1.0f - sstep(-0.06f, 0.06f, (nb - _fmaxf(nr, ng)) / nmx));
+        l = polar(l, dir, sd, kr, below, fiGlare / 100.0f, st, lcr);
+        sf = 8;
+    }
+    if (f == 29 || f == 30) {
+        float an = fiAngle * 0.0174533f;
+        float px = ((float)(x) + 0.5f - 0.5f * (float)(W)) / (float)(H), py = ((float)(y) + 0.5f) / (float)(H) - fiPos / 100.0f;
+        float d = -(py * _cosf(an) - px * _sinf(an));
+        float hw = 0.01f + 0.40f * fiSoft / 100.0f;
+        float gw = sstep(-hw, hw, d);
+        if (f == 30) gw = sstep(-hw * 0.5f, 0.0f, d) * (1.0f - 0.7f * sstep(0.0f, 0.55f, d));
+        dg = fiStops * st * gw * 0.6931472f;
+        expo = _exp2f(-fiStops * st * gw);
+        sf = -1; gc = (int)(fiGradCol + 0.5f);
+    }
+    float3 o;
+    if (mono == 1) {
+        float3 fw = specRow(sf, gc, st, dg, 3);
+        float tot = fw.x + fw.y + fw.z;
+        float Y = dot3(fw, l) / _fmaxf(tot, 1e-6f) * expo;
+        float dv = sCurve(toDisp(Y), 1.4f, 0.45f);
+        o = make_float3(dv, dv, dv);
+    } else {
+        float3 m0 = specRow(sf, gc, st, dg, 0), m1 = specRow(sf, gc, st, dg, 1), m2 = specRow(sf, gc, st, dg, 2);
+        float Yw = 0.2126f * (m0.x + m0.y + m0.z) + 0.7152f * (m1.x + m1.y + m1.z) + 0.0722f * (m2.x + m2.y + m2.z);
+        float mxw = _fmaxf(m0.x + m0.y + m0.z, _fmaxf(m1.x + m1.y + m1.z, m2.x + m2.y + m2.z));
+        float gain = _fminf(_fminf(1.0f / _fmaxf(Yw, 1e-6f), 6.0f), 2.0f / _fmaxf(mxw, 1e-6f)) * expo;
+        float r = dot3(m0, l) * gain, g = dot3(m1, l) * gain, b = dot3(m2, l) * gain;
+        r = _fmaxf(r, 0.0f); g = _fmaxf(g, 0.0f); b = _fmaxf(b, 0.0f);
+        float mx = _fmaxf(r, _fmaxf(g, b));
+        float kk = mx > 0.9f ? (0.9f + 0.1f * _tanhf((mx - 0.9f) / 0.1f)) / mx : 1.0f;
+        float wk = sstep(1.0f, 1.1f, mx);
+        kk = lerp1(1.0f, kk, wk);
+        o = make_float3(toDisp(r * kk), toDisp(g * kk), toDisp(b * kk));
+    }
+    float am = fiAmount / 100.0f;
+    return make_float3(_saturatef(lerp1(c0.x, o.x, am)), _saturatef(lerp1(c0.y, o.y, am)), _saturatef(lerp1(c0.z, o.z, am)));
+}

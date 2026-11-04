@@ -1,0 +1,52 @@
+// Develop Bloom, one level of the glow cascade. Level k blurs its input with
+// the B3 spline [1 4 6 4 1] / 16 at a spacing of 2^k pixels at 1080 lines (25 taps); after levels 0 to k the
+// blur has sigma sqrt((4^(k+1) - 1) / 3): 1, 2.2, 4.6, 9.2, 18.5, 36.9 and 73.9 px at 1080.
+// Its output feeds the next level and one Layer Mixer input (Add). It leaves the node scaled by its weight
+// times the warmth tint; the next level divides that back out before blurring. Weights follow
+// 2^(k (2 - Falloff)): Falloff 2 gives every level the same light, a 1/r^2 tail; the weights of the
+// seven levels sum to Bloom x 1.6. MIT License.
+
+DEFINE_UI_PARAMS(level,     Level,         DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 6.0, 1.0)
+DEFINE_UI_PARAMS(bloomAmt,  Bloom,         DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(bloomFall, Bloom Falloff, DCTLUI_SLIDER_FLOAT, 2.0, 1.2, 3.0, 0.05)
+DEFINE_UI_PARAMS(bloomWarm, Bloom Warmth,  DCTLUI_SLIDER_FLOAT, 0.0, -100.0, 100.0, 1.0)
+
+__DEVICE__ float levelWeight(int k, float p, float total)
+{
+    float sum = 0.0f;
+    for (int j = 0; j < 7; j++) sum += _exp2f((float)(j) * (2.0f - p));
+    return _exp2f((float)(k) * (2.0f - p)) / sum * total;
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int k = (int)(level + 0.5f);
+    float total = bloomAmt / 100.0f * 1.6f;
+    float wt = bloomWarm / 100.0f;
+    float tr = 1.0f + 0.35f * wt, tg = 1.0f + 0.05f * wt, tb = 1.0f - 0.35f * wt;
+    float w = levelWeight(k, bloomFall, total);
+    float ur = 1.0f, ug = 1.0f, ub = 1.0f;
+    if (k > 0)
+    {
+        float wp = levelWeight(k - 1, bloomFall, total);
+        ur = 1.0f / _fmaxf(wp * tr, 1e-8f); ug = 1.0f / _fmaxf(wp * tg, 1e-8f); ub = 1.0f / _fmaxf(wp * tb, 1e-8f);
+    }
+    int d = (int)(_exp2f((float)(k)) * (float)p_Height / 1080.0f + 0.5f);
+    d = d < 1 ? 1 : d;
+    float ar = 0.0f, ag = 0.0f, ab = 0.0f;
+    for (int j = -2; j <= 2; j++)
+    {
+        float wy = (j == 0 ? 6.0f : (j == 1 || j == -1 ? 4.0f : 1.0f)) / 16.0f;
+        int y = p_Y + j * d;
+        y = y < 0 ? 0 : (y > p_Height - 1 ? p_Height - 1 : y);
+        for (int i = -2; i <= 2; i++)
+        {
+            float wx = (i == 0 ? 6.0f : (i == 1 || i == -1 ? 4.0f : 1.0f)) / 16.0f;
+            int x = p_X + i * d;
+            x = x < 0 ? 0 : (x > p_Width - 1 ? p_Width - 1 : x);
+            float q = wx * wy;
+            ar += q * _tex2D(p_TexR, x, y); ag += q * _tex2D(p_TexG, x, y); ab += q * _tex2D(p_TexB, x, y);
+        }
+    }
+    return make_float3(ar * ur * w * tr, ag * ug * w * tg, ab * ub * w * tb);
+}

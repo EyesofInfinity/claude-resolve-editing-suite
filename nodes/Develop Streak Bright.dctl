@@ -1,0 +1,82 @@
+// Develop Streak, pass 1 of 3 (the anamorphic streak): the light that streaks. Rec.709 gamma 2.4 in (the
+// graded picture, from the end of the look stage). A pixel's light above Streak Threshold (a soft knee on luminance,
+// colour kept, as Develop Bloom Bright), desaturated 60% toward its luminance, weighted by how much of a point light
+// it is: its luminance against the brightest tap on a ring of Streak Source Size around it,
+// so a lamp, a glint or the moon streaks and a bright sky, a sunlit field or the edge of either does not. The ring's
+// taps sit about 2 px apart, in groups of 16 (13 groups, 208 taps, at the 6% default and 1080 lines; 416 taps at 2160),
+// so a thin bright line at any angle meets one. A tap outside the frame reads nothing: a light at the frame's edge is
+// judged on the part of the ring inside the frame. Smeared over three rows by Streak Thickness; a row outside the frame
+// adds nothing. Out: linear light times 1/8, for Develop Streak Mid. MIT License.
+
+DEFINE_UI_PARAMS(stkThr,   Streak Threshold,   DCTLUI_SLIDER_FLOAT, 82.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(stkThick, Streak Thickness,   DCTLUI_SLIDER_FLOAT, 1.3, 1.0, 3.0, 0.1)
+DEFINE_UI_PARAMS(stkSrc,   Streak Source Size, DCTLUI_SLIDER_FLOAT, 6.0, 0.5, 10.0, 0.1)
+
+DEFINE_UI_TOOLTIP(Streak Threshold, "Display brightness where a light starts to streak")
+DEFINE_UI_TOOLTIP(Streak Thickness, "How many rows thick the streak line is, in pixels at 1080 lines")
+DEFINE_UI_TOOLTIP(Streak Source Size, "The largest light that streaks, in percent of the frame height: anything brighter over a wider area does not")
+
+__DEVICE__ float luma(float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; }
+__DEVICE__ float toLin(float x) { return _powf(_fmaxf(x, 0.0f), 2.4f); }
+__DEVICE__ float smooth01(float a, float b, float x)
+{
+    float t = _saturatef((x - a) / (b - a));
+    return t * t * (3.0f - 2.0f * t);
+}
+
+__DEVICE__ float3 streakLight(int x, int y, int p_Width, int p_Height, float thr, float rad, int ng,
+                              __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float r = toLin(_tex2D(p_TexR, x, y)), g = toLin(_tex2D(p_TexG, x, y)), b = toLin(_tex2D(p_TexB, x, y));
+    float Y = luma(r, g, b);
+    float kn = 0.5f * thr;
+    float s = _clampf(Y - thr + kn, 0.0f, 2.0f * kn);
+    float w = _fmaxf(s * s / (4.0f * kn + 1e-5f), Y - thr) / _fmaxf(Y, 1e-5f);
+    float pw = 0.0f;
+    if (w > 0.0f)
+    {
+        float mr = 0.0f;
+        for (int p = 0; p < ng; p++)
+        {
+            if ((Y - mr) / _fmaxf(Y, 1e-5f) > 0.3f)
+            {
+                for (int j = 0; j < 16; j++)
+                {
+                    float an = 0.39269908f * ((float)(j) + (float)(p) / (float)(ng));
+                    int sx = x + (int)(_round(rad * _cosf(an))), sy = y + (int)(_round(rad * _sinf(an)));
+                    if (sx >= 0 && sx <= p_Width - 1 && sy >= 0 && sy <= p_Height - 1)
+                    {
+                        mr = _fmaxf(mr, luma(toLin(_tex2D(p_TexR, sx, sy)), toLin(_tex2D(p_TexG, sx, sy)), toLin(_tex2D(p_TexB, sx, sy))));
+                    }
+                }
+            }
+        }
+        pw = smooth01(0.3f, 0.8f, (Y - mr) / _fmaxf(Y, 1e-5f));
+    }
+    float br = r * w * pw, bg = g * w * pw, bb = b * w * pw, by = Y * w * pw;
+    return make_float3(by + 0.4f * (br - by), by + 0.4f * (bg - by), by + 0.4f * (bb - by));
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float thr = toLin(stkThr / 100.0f);
+    float rad = stkSrc / 100.0f * (float)(p_Height);
+    int ng = (int)(6.2831853f * rad / 32.0f) + 1;
+    float side = _fminf(_fmaxf(stkThick - 1.0f, 0.0f), 2.0f) * 0.25f;
+    float3 c = streakLight(p_X, p_Y, p_Width, p_Height, thr, rad, ng, p_TexR, p_TexG, p_TexB);
+    float ar = c.x, ag = c.y, ab = c.z, aw = 1.0f;
+    if (side > 0.0f)
+    {
+        float3 u = make_float3(0.0f, 0.0f, 0.0f), v = make_float3(0.0f, 0.0f, 0.0f);
+        if (p_Y > 0)
+        {
+            u = streakLight(p_X, p_Y - 1, p_Width, p_Height, thr, rad, ng, p_TexR, p_TexG, p_TexB);
+        }
+        if (p_Y < p_Height - 1)
+        {
+            v = streakLight(p_X, p_Y + 1, p_Width, p_Height, thr, rad, ng, p_TexR, p_TexG, p_TexB);
+        }
+        ar += side * (u.x + v.x); ag += side * (u.y + v.y); ab += side * (u.z + v.z); aw += 2.0f * side;
+    }
+    return make_float3(ar / aw * 0.125f, ag / aw * 0.125f, ab / aw * 0.125f);
+}

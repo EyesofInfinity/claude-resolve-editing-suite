@@ -1,0 +1,26 @@
+{
+ "schema": "develop.look/0",
+ "name": "Warm Film with Leak",
+ "values": {
+  "contr": 18,
+  "blacks": -6,
+  "shadow": 8,
+  "hilite": -35,
+  "density": 30,
+  "vibr": 16,
+  "cContr": 18,
+  "shHue": 195,
+  "shSat": 30,
+  "hiHue": 38,
+  "hiSat": 26,
+  "gBal": -10,
+  "halAmt": 35,
+  "rolloff": 60,
+  "temp": 7,
+  "filmGrain": 22
+ },
+ "per_shot": {},
+ "effects": [
+  {"effect": "Develop Leak", "values": {"lkAmount": 30, "lkEdge": 200, "lkWidth": 35}}
+ ]
+}

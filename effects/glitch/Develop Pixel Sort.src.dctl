@@ -1,0 +1,79 @@
+// Develop Pixel Sort: runs of pixels inside a brightness band sorted by brightness along a direction. A run is cut where the brightness leaves the band and at a fixed grid of Max Length along the
+// direction, so every pixel of a run agrees on its run. Each pixel takes the colour of the run's pixel whose rank
+// matches its own place (dark to bright along the direction), found by bisection on brightness: about 12 reads of
+// the run per pixel. Run it as an OpenFX DCTL effect on a clip or as a DCTL plugin node; Drift moves the band over
+// frames (TIMELINE_FRAME_INDEX), so as a LUT it holds still. MIT License.
+
+DEFINE_UI_PARAMS(psAmount, Pixel Sort,     DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(psLow,    Sort Above,     DCTLUI_SLIDER_FLOAT, 45.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(psHigh,   Sort Below,     DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(psLength, Max Length,     DCTLUI_SLIDER_FLOAT, 35.0, 1.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(psDir,    Direction,      DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 3.0, 1.0)
+DEFINE_UI_PARAMS(psDrift,  Drift,          DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(psGrit,   Grit,           DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(psDither, Dither,         DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Sort Above, "Pixels brighter than this (and darker than Sort Below) are sorted")
+DEFINE_UI_TOOLTIP(Max Length, "Longest run in pixels at 1080: 1 is 6 px, 100 is 512 px (512 at any size)")
+DEFINE_UI_TOOLTIP(Direction, "Bright end toward: 0 right, 1 down, 2 left, 3 up")
+DEFINE_UI_TOOLTIP(Drift, "The band wanders over frames, so the sorted runs crawl")
+
+#include "../light/light.h"
+#include "../glitch/glitch.h"
+
+__DEVICE__ int inBand(float l, float lo, float hi) { return (l >= lo && l <= hi) ? 1 : 0; }
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    int W = p_Width, H = p_Height;
+    float3 c0 = rgbAt(p_TexR, p_TexG, p_TexB, p_X, p_Y, W, H);
+    if (psAmount <= 0.0f) return c0;
+    float t = (float)(TIMELINE_FRAME_INDEX);
+    float wob = psDrift / 100.0f * 0.12f * (fbm(t * 0.05f, 3.0f, 0.0f, 2, 61u) - 0.5f) * 2.0f;
+    float lo = psLow / 100.0f + wob, hi = psHigh / 100.0f + wob;
+    if (inBand(luma(c0.x, c0.y, c0.z), lo, hi) == 0) return c0;
+    int dir = (int)(psDir + 0.5f);
+    int dx = dir == 0 ? 1 : (dir == 2 ? -1 : 0), dy = dir == 1 ? 1 : (dir == 3 ? -1 : 0);
+    int L = (int)(_powf(2.0f, 2.0f + 7.0f * (psLength - 1.0f) / 99.0f) * (float)(H) / 1080.0f) + 2;
+    if (L > 512) L = 512;
+    int pos = dx != 0 ? p_X : p_Y, len = dx != 0 ? W : H;
+    int line = dx != 0 ? p_Y : p_X;
+    int off = (int)(hash01((uint)(line + 1), 17u, 3u) * (float)(L));
+    int c0p = (int)((pos + off) / L) * L - off, c1p = c0p + L - 1;
+    if (c0p < 0) c0p = 0;
+    if (c1p > len - 1) c1p = len - 1;
+    int s = pos, e = pos;
+    for (int k = 0; k < 512; k++) {
+        if (s - 1 < c0p) break;
+        int q = s - 1;
+        if (inBand(lumaAt(p_TexR, p_TexG, p_TexB, dx != 0 ? q : p_X, dx != 0 ? p_Y : q, W, H), lo, hi) == 0) break;
+        s = q;
+    }
+    for (int k = 0; k < 512; k++) {
+        if (e + 1 > c1p) break;
+        int q = e + 1;
+        if (inBand(lumaAt(p_TexR, p_TexG, p_TexB, dx != 0 ? q : p_X, dx != 0 ? p_Y : q, W, H), lo, hi) == 0) break;
+        e = q;
+    }
+    int n = e - s + 1;
+    if (n < 2) return c0;
+    int rank = (dx + dy) > 0 ? pos - s : e - pos;
+    float a = lo, b = hi + 1e-4f;
+    for (int it = 0; it < 12; it++) {
+        float m = 0.5f * (a + b);
+        int cnt = 0;
+        for (int q = s; q <= e; q++) {
+            if (lumaAt(p_TexR, p_TexG, p_TexB, dx != 0 ? q : p_X, dx != 0 ? p_Y : q, W, H) < m) cnt += 1;
+        }
+        if (cnt <= rank) a = m; else b = m;
+    }
+    float3 got = c0;
+    for (int q = s; q <= e; q++) {
+        float3 c = rgbAt(p_TexR, p_TexG, p_TexB, dx != 0 ? q : p_X, dx != 0 ? p_Y : q, W, H);
+        float l = luma(c.x, c.y, c.z);
+        if (l >= a && l < b) { got = c; break; }
+    }
+    float k = psAmount / 100.0f;
+    float3 o = make_float3(lerp1(c0.x, got.x, k), lerp1(c0.y, got.y, k), lerp1(c0.z, got.z, k));
+    return gritFinish(o, p_X, p_Y, H, k, psGrit / 100.0f, psDither / 100.0f, (uint)(TIMELINE_FRAME_INDEX) * 7u + 3u);
+}

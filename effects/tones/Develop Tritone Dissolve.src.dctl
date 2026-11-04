@@ -1,0 +1,110 @@
+// Develop Tritone Dissolve: a dissolve through a printed tritone in one Transition DCTL. Lay
+// it on a cut from Edit page > OpenFX > Transition > ResolveFX Color > DCTL and pick this file.
+// A tritone prints a picture's tones with three inks: the darkest ink is the floor, the paper's tint is the ceiling,
+// and a middle ink carries the mid tones. Here each shot's own luminance is its tone. The outgoing shot falls into a
+// print of itself, the print's tones cross from the outgoing shot's to the incoming shot's (one plate printed from
+// both), and the incoming shot rises out of its own print. The print keeps each tone's brightness between the floor
+// and the ceiling: tone 0 prints at the Shadow colour, tone 1 at the Highlight colour, and the Mid colour sits at the
+// tone of its own brightness, so the print re-colours the picture and keeps its light.
+// Defaults are a classic print tritone: a warm near-black floor #1F1711, a sepia mid #A88A65 and a cream ceiling
+// #F5EBD3. Each colour is Hue (degrees), Saturation and Level (HSV, percent).
+//   Tone: how fully the picture goes into the print at the peak (0 is a plain dissolve)
+//   Hold: how long the print holds around the cut, in percent of the dissolve
+//   Tone Lead: positive brings the incoming shot in through its shadows first, negative through its highlights
+//   Pulse, Pulses: the print breathes, its mid tones lifting and settling once to three times across the dissolve
+// TRANSITION_PROGRESS runs it; it starts exactly on the outgoing shot and ends exactly on the incoming, easing off
+// both. Rec.709 gamma 2.4 display values in and out. MIT License.
+
+DEFINE_UI_PARAMS(ttShH,    Shadow Hue,        DCTLUI_SLIDER_FLOAT, 28.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(ttShS,    Shadow Sat,        DCTLUI_SLIDER_FLOAT, 45.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ttShV,    Shadow Level,      DCTLUI_SLIDER_FLOAT, 12.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ttMiH,    Mid Hue,           DCTLUI_SLIDER_FLOAT, 33.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(ttMiS,    Mid Sat,           DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ttMiV,    Mid Level,         DCTLUI_SLIDER_FLOAT, 66.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ttHiH,    Highlight Hue,     DCTLUI_SLIDER_FLOAT, 42.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(ttHiS,    Highlight Sat,     DCTLUI_SLIDER_FLOAT, 14.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ttHiV,    Highlight Level,   DCTLUI_SLIDER_FLOAT, 96.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ttTone,   Tone,              DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ttHold,   Hold,              DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 60.0, 1.0)
+DEFINE_UI_PARAMS(ttLead,   Tone Lead,         DCTLUI_SLIDER_FLOAT, 40.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ttPulse,  Pulse,             DCTLUI_SLIDER_FLOAT, 25.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(ttPulses, Pulses,            DCTLUI_SLIDER_FLOAT, 1.0, 1.0, 3.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Tone, "How fully the picture goes into the print at the peak; 0 is a plain dissolve")
+DEFINE_UI_TOOLTIP(Hold, "How long the print holds around the cut, percent of the dissolve")
+DEFINE_UI_TOOLTIP(Tone Lead, "Positive: the incoming shot comes in through its shadows first; negative: through its highlights")
+DEFINE_UI_TOOLTIP(Pulse, "The print breathes: its mid tones lift and settle")
+
+#include "../light/light.h"
+
+__DEVICE__ float3 hsvF(float h, float s, float v)
+{
+    float hh = h / 60.0f;
+    float kr = 5.0f + hh, kg = 3.0f + hh, kb = 1.0f + hh;
+    kr = kr - 6.0f * _floorf(kr / 6.0f); kg = kg - 6.0f * _floorf(kg / 6.0f); kb = kb - 6.0f * _floorf(kb / 6.0f);
+    float r = v - v * s * _fmaxf(0.0f, _fminf(kr, _fminf(4.0f - kr, 1.0f)));
+    float g = v - v * s * _fmaxf(0.0f, _fminf(kg, _fminf(4.0f - kg, 1.0f)));
+    float b = v - v * s * _fmaxf(0.0f, _fminf(kb, _fminf(4.0f - kb, 1.0f)));
+    return make_float3(_saturatef(r), _saturatef(g), _saturatef(b));
+}
+
+__DEVICE__ float3 linC(float3 c) { return make_float3(toLin(c.x), toLin(c.y), toLin(c.z)); }
+
+__DEVICE__ float lumL(float3 c) { return luma(toLin(_saturatef(c.x)), toLin(_saturatef(c.y)), toLin(_saturatef(c.z))); }
+
+__DEVICE__ float3 chromaF(float3 lc)
+{
+    float L = luma(lc.x, lc.y, lc.z), e = 1e-4f;
+    return make_float3((lc.x + e) / (L + e), (lc.y + e) / (L + e), (lc.z + e) / (L + e));
+}
+
+__DEVICE__ float3 printT(float u, float ts, float th, float pm, float3 S, float3 M, float3 Hc)
+{
+    float uu = _saturatef(u);
+    float Lt = toLin(lerp1(ts, th, uu));
+    float3 d;
+    if (uu < pm) {
+        float w = sstep(0.0f, pm, uu);
+        d = make_float3(lerp1(S.x, M.x, w), lerp1(S.y, M.y, w), lerp1(S.z, M.z, w));
+    } else {
+        float w = sstep(pm, 1.0f, uu);
+        d = make_float3(lerp1(M.x, Hc.x, w), lerp1(M.y, Hc.y, w), lerp1(M.z, Hc.z, w));
+    }
+    float3 c = chromaF(linC(d));
+    return make_float3(_saturatef(toDisp(c.x * Lt)), _saturatef(toDisp(c.y * Lt)), _saturatef(toDisp(c.z * Lt)));
+}
+
+__DEVICE__ float4 transition(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_FromTexR, __TEXTURE__ p_FromTexG, __TEXTURE__ p_FromTexB, __TEXTURE__ p_FromTexA, __TEXTURE__ p_ToTexR, __TEXTURE__ p_ToTexG, __TEXTURE__ p_ToTexB, __TEXTURE__ p_ToTexA)
+{
+    float p = _saturatef(TRANSITION_PROGRESS);
+    float ar = _tex2D(p_FromTexR, p_X, p_Y), ag = _tex2D(p_FromTexG, p_X, p_Y), ab = _tex2D(p_FromTexB, p_X, p_Y);
+    float br = _tex2D(p_ToTexR, p_X, p_Y), bg = _tex2D(p_ToTexG, p_X, p_Y), bb = _tex2D(p_ToTexB, p_X, p_Y);
+    if (p <= 0.0f) return make_float4(ar, ag, ab, 1.0f);
+    if (p >= 1.0f) return make_float4(br, bg, bb, 1.0f);
+
+    float3 S = hsvF(ttShH, ttShS / 100.0f, ttShV / 100.0f);
+    float3 M = hsvF(ttMiH, ttMiS / 100.0f, ttMiV / 100.0f);
+    float3 Hc = hsvF(ttHiH, ttHiS / 100.0f, ttHiV / 100.0f);
+    float ts = toDisp(lumL(S)), tm = toDisp(lumL(M)), th = toDisp(lumL(Hc));
+    float span = th - ts;
+    float pm = _fabs(span) > 0.02f ? (tm - ts) / span : 0.5f;
+    pm = _clampf(pm, 0.1f, 0.9f);
+
+    float a = 0.5f - 0.5f * ttHold / 100.0f;
+    float k = fade(_saturatef(p / a)) * fade(_saturatef((1.0f - p) / a)) * ttTone / 100.0f;
+    float c0 = 0.6f * a;
+    float tc = fade(_saturatef((p - c0) / (1.0f - 2.0f * c0)));
+
+    float Ta = toDisp(luma(toLin(_saturatef(ar)), toLin(_saturatef(ag)), toLin(_saturatef(ab))));
+    float Tb = toDisp(luma(toLin(_saturatef(br)), toLin(_saturatef(bg)), toLin(_saturatef(bb))));
+    float t = _saturatef(tc + ttLead / 100.0f * 4.0f * tc * (1.0f - tc) * (0.5f - Tb));
+    float T = lerp1(Ta, Tb, t);
+    float n = _floorf(ttPulses + 0.5f);
+    float br8 = 0.5f - 0.5f * _cosf(6.2831853f * n * p);
+    T = _saturatef(T + ttPulse / 100.0f * 0.14f * br8 * 4.0f * T * (1.0f - T));
+
+    float3 P = printT(T, ts, th, pm, S, M, Hc);
+    float ur = lerp1(ar, br, t), ug = lerp1(ag, bg, t), ub = lerp1(ab, bb, t);
+    float orr = lerp1(ur, P.x, k), og = lerp1(ug, P.y, k), ob = lerp1(ub, P.z, k);
+    return make_float4(orr, og, ob, 1.0f);
+}

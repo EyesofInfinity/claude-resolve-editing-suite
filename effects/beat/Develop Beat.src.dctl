@@ -1,0 +1,183 @@
+// Develop Beat: the picture moves with the music. beat.py bakes a song's beats,
+// downbeats, hits, low hits and band energies into this file (a DCTL cannot read audio); this copy has no song and
+// follows its BPM slider (120 when 0). Seven reactions, each from what an editor does by hand on the beat: Glow
+// (the highlights bloom), Punch In (a cut-in zoom with the blur of its move), Shake (a camera hit that dies away),
+// Flash (an exposure flash, at most 3 a second), Grade Lift (contrast, colour and light lift on the hit), Breathe
+// (the light swells from the centre with the bass), Split (the colours part toward the edges). Amount 0 or a quiet
+// moment gives the picture back exactly. Moves by TIMELINE_FRAME_INDEX, counted from the timeline's start: run it as
+// an OpenFX DCTL effect or a DCTL plugin node, set Music Start to where the song sits on the timeline and Timeline
+// FPS to the timeline's rate. Rec.709 gamma 2.4 in and out. MIT License.
+
+DEFINE_UI_PARAMS(btMode,    Reaction,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 6.0, 1.0)
+DEFINE_UI_PARAMS(btAmount,  Amount,          DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(btSource,  Source,          DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 6.0, 1.0)
+DEFINE_UI_PARAMS(btShape,   Shape,           DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 2.0, 1.0)
+DEFINE_UI_PARAMS(btAttack,  Attack ms,       DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 500.0, 1.0)
+DEFINE_UI_PARAMS(btRelease, Release ms,      DCTLUI_SLIDER_FLOAT, 250.0, 20.0, 2000.0, 1.0)
+DEFINE_UI_PARAMS(btAccent,  Downbeat Accent, DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(btRate,    Max Hits a Second, DCTLUI_SLIDER_FLOAT, 4.0, 1.0, 8.0, 1.0)
+DEFINE_UI_PARAMS(btSize,    Size,            DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(btX,       Center X,        DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(btY,       Center Y,        DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(btWarm,    Warmth,          DCTLUI_SLIDER_FLOAT, 20.0, -100.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(btFloor,   Band Floor,      DCTLUI_SLIDER_FLOAT, 25.0, 0.0, 90.0, 1.0)
+DEFINE_UI_PARAMS(btNudge,   Nudge Frames,    DCTLUI_SLIDER_FLOAT, 0.0, -6.0, 6.0, 1.0)
+DEFINE_UI_PARAMS(btStart,   Music Start s,   DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 3600.0, 0.01)
+DEFINE_UI_PARAMS(btFps,     Timeline FPS,    DCTLUI_SLIDER_FLOAT, 24.0, 12.0, 120.0, 0.001)
+DEFINE_UI_PARAMS(btBpm,     BPM,             DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 300.0, 0.1)
+
+DEFINE_UI_TOOLTIP(Reaction, "0 Glow, 1 Punch In, 2 Shake, 3 Flash, 4 Grade Lift, 5 Breathe, 6 Split")
+DEFINE_UI_TOOLTIP(Source, "0 Beats, 1 Downbeats, 2 Hits, 3 Low Hits (kick and bass), 4 Bass, 5 Mids, 6 Highs")
+DEFINE_UI_TOOLTIP(Shape, "0 Hit (on the beat, then dies away), 1 Pump (ducks on the beat and breathes back), 2 Swell (rises into the beat)")
+DEFINE_UI_TOOLTIP(Max Hits a Second, "8, 4, 3 or 2: closer hits are thinned, the strongest kept. Glow, Flash, Grade Lift and Breathe never pass 3")
+DEFINE_UI_TOOLTIP(Nudge Frames, "Moves every hit; -1 lands the picture a frame before the sound, as many editors cut")
+DEFINE_UI_TOOLTIP(BPM, "0 follows the baked song; any other value (or no song) follows a steady beat from Music Start")
+
+#include "../light/light.h"
+#include "beat.h"
+
+__DEVICE__ float3 btTap(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int w, int h, float x, float y)
+{
+    float fx = _clampf(x, 0.0f, w - 1.0f), fy = _clampf(y, 0.0f, h - 1.0f);
+    int x0 = (int)(_floorf(fx)), y0 = (int)(_floorf(fy));
+    int x1 = x0 + 1 < w ? x0 + 1 : w - 1;
+    int y1 = y0 + 1 < h ? y0 + 1 : h - 1;
+    float ax = fx - _floorf(fx), ay = fy - _floorf(fy);
+    float r = lerp1(lerp1(_tex2D(tr, x0, y0), _tex2D(tr, x1, y0), ax), lerp1(_tex2D(tr, x0, y1), _tex2D(tr, x1, y1), ax), ay);
+    float g = lerp1(lerp1(_tex2D(tg, x0, y0), _tex2D(tg, x1, y0), ax), lerp1(_tex2D(tg, x0, y1), _tex2D(tg, x1, y1), ax), ay);
+    float b = lerp1(lerp1(_tex2D(tb, x0, y0), _tex2D(tb, x1, y0), ax), lerp1(_tex2D(tb, x0, y1), _tex2D(tb, x1, y1), ax), ay);
+    return make_float3(r, g, b);
+}
+
+__DEVICE__ float3 btZoom(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int w, int h, float px, float py, float cx, float cy, float z, float z0)
+{
+    float zs = z - 0.5f * (z - z0);
+    int n = _fabs(z - zs) * _fmaxf(w, h) > 1.0f ? 8 : 1;
+    float r = 0.0f, g = 0.0f, b = 0.0f;
+    for (int k = 0; k < n; k++) {
+        float zk = n == 1 ? z : lerp1(zs, z, (k + 0.5f) / n);
+        float3 c = btTap(tr, tg, tb, w, h, cx + (px - cx) / zk, cy + (py - cy) / zk);
+        r += c.x; g += c.y; b += c.z;
+    }
+    return make_float3(r / n, g / n, b / n);
+}
+
+__DEVICE__ float3 btShakeAt(float ts, float a, float freq, int h)
+{
+    float u = ts * freq + 4096.0f;
+    float nx = vnoise3(u, 3.5f, 0.5f, 11u) + 0.5f * vnoise3(u * 2.03f, 7.5f, 0.5f, 12u) - 0.75f;
+    float ny = vnoise3(u, 17.5f, 0.5f, 13u) + 0.5f * vnoise3(u * 2.03f, 21.5f, 0.5f, 14u) - 0.75f;
+    float nr = vnoise3(u * 0.8f, 31.5f, 0.5f, 15u) - 0.5f;
+    return make_float3(nx * a * 0.07f * h, ny * a * 0.07f * h, nr * a * 0.035f);
+}
+
+__DEVICE__ float3 btShake(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int w, int h, float px, float py, float3 s, float3 s0, float z)
+{
+    float cx = 0.5f * w, cy = 0.5f * h;
+    int n = _fabs(s.x - s0.x) + _fabs(s.y - s0.y) + _fabs(s.z - s0.z) * h > 0.75f ? 7 : 1;
+    float r = 0.0f, g = 0.0f, b = 0.0f;
+    for (int k = 0; k < n; k++) {
+        float f = n == 1 ? 1.0f : 0.5f + 0.5f * (k + 0.5f) / n;
+        float ox = lerp1(s0.x, s.x, f), oy = lerp1(s0.y, s.y, f), an = lerp1(s0.z, s.z, f);
+        float dx = (px - cx) / z, dy = (py - cy) / z;
+        float ca = _cosf(an), sa = _sinf(an);
+        float3 c = btTap(tr, tg, tb, w, h, cx + ca * dx - sa * dy - ox, cy + sa * dx + ca * dy - oy);
+        r += c.x; g += c.y; b += c.z;
+    }
+    return make_float3(r / n, g / n, b / n);
+}
+
+__DEVICE__ float3 btGlow(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int w, int h, float px, float py, float rad)
+{
+    float r = 0.0f, g = 0.0f, b = 0.0f, ws = 0.0f;
+    for (int k = 0; k < 48; k++) {
+        float q = _sqrtf((k + 0.5f) / 48.0f);
+        float an = k * 2.399963f;
+        int sx = (int)(_clampf(px + rad * q * _cosf(an) + 0.5f, 0.0f, w - 1.0f));
+        int sy = (int)(_clampf(py + rad * q * _sinf(an) + 0.5f, 0.0f, h - 1.0f));
+        float lr = toLin(_tex2D(tr, sx, sy)), lg = toLin(_tex2D(tg, sx, sy)), lb = toLin(_tex2D(tb, sx, sy));
+        float l = luma(lr, lg, lb);
+        float k2 = _fmaxf(l - 0.45f, 0.0f);
+        float hl = k2 * k2 / (k2 + 0.1f) / _fmaxf(l, 0.0001f);
+        float wt = _expf(-2.5f * q * q);
+        r += wt * hl * lr; g += wt * hl * lg; b += wt * hl * lb; ws += wt;
+    }
+    return make_float3(r / ws, g / ws, b / ws);
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float ir = _tex2D(p_TexR, p_X, p_Y), ig = _tex2D(p_TexG, p_X, p_Y), ib = _tex2D(p_TexB, p_X, p_Y);
+    int mode = (int)(btMode + 0.5f);
+    int src = (int)(btSource + 0.5f);
+    int shape = (int)(btShape + 0.5f);
+    float fps = btFps;
+    int bright = (mode == 0 || mode == 3 || mode == 4 || mode == 5) ? 1 : 0;
+    float tier = btTier(btRate, bright);
+    float atk = btAttack * fps / 1000.0f, rel = btRelease * fps / 1000.0f;
+    float frame = TIMELINE_FRAME_INDEX;
+    float e = btEnv(frame, btStart, btNudge, fps, src, shape, atk, rel, btAccent / 100.0f, tier, btBpm, btFloor / 100.0f);
+    float a = btAmount / 100.0f * e;
+    if (a <= 0.0f) return make_float3(ir, ig, ib);
+    int w = p_Width, h = p_Height;
+    float px = p_X, py = p_Y;
+    float cx = btX / 100.0f * w, cy = btY / 100.0f * h;
+    float warm = btWarm / 100.0f;
+    float lr = toLin(ir), lg = toLin(ig), lb = toLin(ib);
+
+    if (mode == 1 || mode == 2 || mode == 6) {
+        float e0 = btEnv(frame - 1.0f, btStart, btNudge, fps, src, shape, atk, rel, btAccent / 100.0f, tier, btBpm, btFloor / 100.0f);
+        float a0 = btAmount / 100.0f * e0;
+        float3 c;
+        if (mode == 1) {
+            c = btZoom(p_TexR, p_TexG, p_TexB, w, h, px, py, cx, cy, 1.0f + 0.2f * a, 1.0f + 0.2f * a0);
+        } else if (mode == 2) {
+            float freq = 3.0f + 9.0f * btSize / 100.0f;
+            float ts = (frame - _floorf(btStart * fps + 0.5f)) / fps;
+            float3 s = btShakeAt(ts, a, freq, h);
+            float3 s0 = btShakeAt(ts - 0.5f / fps, 0.5f * (a + a0), freq, h);
+            c = btShake(p_TexR, p_TexG, p_TexB, w, h, px, py, s, s0, 1.0f + 0.16f * a);
+        } else {
+            float sp = 0.014f * a * (0.5f + btSize / 100.0f);
+            float rr = 0.0f, bb = 0.0f;
+            for (int k = 0; k < 3; k++) {
+                float s = sp * (0.55f + 0.45f * k);
+                float3 cr = btTap(p_TexR, p_TexG, p_TexB, w, h, cx + (px - cx) / (1.0f + s), cy + (py - cy) / (1.0f + s));
+                float3 cb = btTap(p_TexR, p_TexG, p_TexB, w, h, cx + (px - cx) / (1.0f - s), cy + (py - cy) / (1.0f - s));
+                rr += cr.x; bb += cb.z;
+            }
+            c = make_float3(rr / 3.0f, ig, bb / 3.0f);
+        }
+        return make_float3(_saturatef(c.x), _saturatef(c.y), _saturatef(c.z));
+    }
+    float or_ = lr, og = lg, ob = lb;
+    if (mode == 0) {
+        float rad = (0.012f + 0.07f * btSize / 100.0f) * h;
+        float3 gl = btGlow(p_TexR, p_TexG, p_TexB, w, h, px, py, rad);
+        float gain = 2.4f * a;
+        or_ = lr * (1.0f + 0.06f * a) + gain * gl.x * (1.0f + 0.25f * warm);
+        og = lg * (1.0f + 0.06f * a) + gain * gl.y;
+        ob = lb * (1.0f + 0.06f * a) + gain * gl.z * (1.0f - 0.25f * warm);
+    } else if (mode == 3) {
+        float k = _exp2f(1.6f * a);
+        float lift = 0.006f * a;
+        or_ = lr * k * (1.0f + 0.08f * warm * a) + lift; og = lg * k + lift; ob = lb * k * (1.0f - 0.08f * warm * a) + lift;
+    } else if (mode == 4) {
+        float con = 1.0f + 0.3f * a, sat = 1.0f + 0.35f * a, ev = 0.4f * a;
+        float pv = _log2f(0.18f);
+        float l0 = _fmaxf(luma(lr, lg, lb), 0.000001f);
+        float l1 = _exp2f((_log2f(l0) - pv) * con + pv + ev);
+        float k = l1 / l0;
+        float yr = lr * k, yg = lg * k, yb = lb * k;
+        float yl = luma(yr, yg, yb);
+        or_ = _fmaxf(yl + (yr - yl) * sat, 0.0f); og = _fmaxf(yl + (yg - yl) * sat, 0.0f); ob = _fmaxf(yl + (yb - yl) * sat, 0.0f);
+    } else {
+        float dx = (px - cx) / (0.5f * h), dy = (py - cy) / (0.5f * h);
+        float r2 = _fminf(dx * dx + dy * dy, 1.6f);
+        float k = _exp2f(0.9f * a * (1.0f - 0.45f * r2));
+        float tw = 0.04f * a * warm;
+        or_ = lr * k * (1.0f + tw); og = lg * k; ob = lb * k * (1.0f - tw);
+    }
+    float3 o = lightOut(or_, og, ob, a);
+    return o;
+}

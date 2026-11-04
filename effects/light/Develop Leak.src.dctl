@@ -1,0 +1,41 @@
+// Develop Leak: a film light leak that drifts and breathes on its own. Coloured light washes in from one edge of the frame, its body a slow cloud,
+// hottest where it is strongest; it adds light in linear and lifts the film base under it (Fog). Run it as an
+// OpenFX DCTL effect on a clip or an adjustment clip, or as a DCTL plugin node: TIMELINE_FRAME_INDEX moves it,
+// so as a LUT it freezes. MIT License.
+
+DEFINE_UI_PARAMS(lkAmount,  Leak,             DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lkPalette, Leak Palette,     DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 3.0, 1.0)
+DEFINE_UI_PARAMS(lkEdge,    Leak Edge Angle,  DCTLUI_SLIDER_FLOAT, 200.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(lkWidth,   Leak Reach,       DCTLUI_SLIDER_FLOAT, 35.0, 5.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lkScale,   Leak Size,        DCTLUI_SLIDER_FLOAT, 50.0, 10.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lkDrift,   Leak Drift,       DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lkBreath,  Leak Breath,      DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lkFog,     Leak Fog,         DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lkSeed,    Leak Seed,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Leak Palette, "0 Violet Burn, 1 Classic warm, 2 Lucid, 3 Night blue")
+DEFINE_UI_TOOLTIP(Leak Edge Angle, "Where the light comes in: 0 right, 90 bottom, 180 left, 270 top")
+DEFINE_UI_TOOLTIP(Leak Breath, "How much the leak swells and fades over a few seconds")
+
+#include "light.h"
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float r = toLin(_tex2D(p_TexR, p_X, p_Y)), g = toLin(_tex2D(p_TexG, p_X, p_Y)), b = toLin(_tex2D(p_TexB, p_X, p_Y));
+    if (lkAmount <= 0.0f) return make_float3(toDisp(r), toDisp(g), toDisp(b));
+    float hh = (float)(p_Height), aspect = (float)(p_Width) / hh;
+    float x = ((float)(p_X) + 0.5f) / hh, y = ((float)(p_Y) + 0.5f) / hh;
+    uint s = (uint)(lkSeed) * 101u + 3u;
+    float t = (float)(TIMELINE_FRAME_INDEX) / 24.0f;
+    float z = t * (0.02f + 0.5f * lkDrift / 100.0f) + lkSeed * 1.7f;
+    float sc = 0.15f + 0.9f * lkScale / 100.0f;
+    float L = leakField(x, y, aspect, lkEdge, lkWidth / 100.0f, sc, z, s);
+    float br = 1.0f - lkBreath / 100.0f * (0.5f - 0.5f * _sinf(6.2831853f * t / 5.3f + lkSeed));
+    float k = sstep(0.05f, 0.95f, L) * br * lkAmount / 60.0f;
+    float3 c = ramp(lkPalette, 0.2f + 0.9f * L, 0.5f);
+    float fog = lkFog / 100.0f * k;
+    r = r * (1.0f - 0.12f * fog) + 0.10f * c.x * fog + 1.1f * c.x * k;
+    g = g * (1.0f - 0.12f * fog) + 0.10f * c.y * fog + 1.1f * c.y * k;
+    b = b * (1.0f - 0.12f * fog) + 0.10f * c.z * fog + 1.1f * c.z * k;
+    return lightOut(r, g, b, k);
+}

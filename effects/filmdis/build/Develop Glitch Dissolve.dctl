@@ -1,0 +1,501 @@
+// Develop Glitch Dissolve: more glitch dissolves and wipes beside Develop Glitch's, in one Transition DCTL. Lay it on a
+// cut from Edit page > OpenFX > Transition > ResolveFX Color > DCTL and pick this file. Style:
+//   0 Pixel Sort: runs of the bright parts sort themselves along Angle (right, down, left, up), the band reaching down
+//     to Threshold and the runs growing to Size at the cut, then sorting back out of the incoming shot
+//   1 Diffuse: the picture breaks into sand, each grain thrown out from its place as the shots trade grains through an
+//     ordered dither; the cut is a dithered dissolve under the widest throw
+//   2 Diffuse Wipe: the same at a front crossing at Angle, Softness wide
+//   3 Pixelate Wipe: a front crossing at Angle breaks the picture into blocks, the biggest on the front, smaller away
+//     from it; each block goes over to the incoming shot whole
+//   4 RGB Displacement: each shot's red, green and blue are pushed apart along three directions by the other shot's
+//     brightness, so the two pictures tear through each other, widest at the cut
+// Glitches are gritty and dithered. Every glitched pixel gets grain riding its brightness and the
+// colour crushed to few levels through an 8 x 8 Bayer dither (Grit, Dither), mixed in as far as it is glitched.
+// Glitch 0 is the clean shape: a plain dissolve (0, 4), a plain dithered dissolve or wipe (1, 2), a hard wipe (3).
+// TRANSITION_PROGRESS runs it; it starts exactly on the outgoing shot and ends exactly on the incoming. MIT License.
+
+DEFINE_UI_PARAMS(gxStyle,  Style,          DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 4.0, 1.0)
+DEFINE_UI_PARAMS(gxAmount, Glitch,         DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gxSize,   Size,           DCTLUI_SLIDER_FLOAT, 50.0, 1.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gxThresh, Threshold,      DCTLUI_SLIDER_FLOAT, 35.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gxAngle,  Angle,          DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(gxSoft,   Softness,       DCTLUI_SLIDER_FLOAT, 40.0, 1.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gxBlend,  Blend,          DCTLUI_SLIDER_FLOAT, 10.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gxGrit,   Grit,           DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gxDither, Dither,         DCTLUI_SLIDER_FLOAT, 85.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(gxSeed,   Seed,           DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Style, "0 Pixel Sort, 1 Diffuse, 2 Diffuse Wipe, 3 Pixelate Wipe, 4 RGB Displacement")
+DEFINE_UI_TOOLTIP(Size, "Sort length, the sand's throw, the biggest block, the displacement")
+DEFINE_UI_TOOLTIP(Threshold, "Pixel Sort: how far down the brightness the band reaches at the cut")
+DEFINE_UI_TOOLTIP(Angle, "Wipe direction and the displacement's red axis; Pixel Sort takes the nearest of right, down, left, up")
+DEFINE_UI_TOOLTIP(Softness, "Diffuse Wipe and Pixelate Wipe: how wide the front is")
+DEFINE_UI_TOOLTIP(Blend, "Pixel Sort and RGB Displacement: 0 cuts under the peak; higher blends the shots across it")
+DEFINE_UI_TOOLTIP(Dither, "Glitched pixels crushed to few levels through a Bayer dither; 100 is 3 levels a channel")
+
+// Develop lens: shared code of Develop Bokeh and Develop Lens, on top of light.h and glitch.h. Bilinear sampling
+// with mirrored edges, linear light (Rec.709 gamma 2.4). MIT License.
+
+// Develop light: the shared code of Develop Leak, Develop Burn and Develop Light Dissolve.
+// build.py writes it into each effect, so every installed .dctl stands alone. Rec.709 gamma 2.4 in and out;
+// light is added in linear. Coordinates are in frame heights (y 0 to 1 top to bottom, x 0 to width/height),
+// so a leak keeps its shape at any resolution and aspect. MIT License.
+
+__DEVICE__ float toLin(float x) { return _powf(_fmaxf(x, 0.0f), 2.4f); }
+__DEVICE__ float toDisp(float x) { return _powf(_fmaxf(x, 0.0f), 1.0f / 2.4f); }
+__DEVICE__ float luma(float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; }
+__DEVICE__ float lerp1(float a, float b, float t) { return a + (b - a) * t; }
+__DEVICE__ float sstep(float a, float b, float x) { float t = _saturatef((x - a) / (b - a)); return t * t * (3.0f - 2.0f * t); }
+
+__DEVICE__ float3 shoulder(float r, float g, float b)
+{
+    float m = _fmaxf(r, _fmaxf(g, b));
+    if (m <= 0.8f) return make_float3(r, g, b);
+    float nm = 0.8f + 0.2f * _tanhf((m - 0.8f) / 0.2f);
+    float k = nm / m, w = 0.6f * sstep(1.0f, 3.0f, m);
+    return make_float3(lerp1(r * k, nm, w), lerp1(g * k, nm, w), lerp1(b * k, nm, w));
+}
+
+__DEVICE__ float3 lightOut(float r, float g, float b, float k)
+{
+    float3 s = shoulder(r, g, b);
+    float w = _saturatef(k * 4.0f);
+    return make_float3(_saturatef(toDisp(lerp1(r, s.x, w))), _saturatef(toDisp(lerp1(g, s.y, w))), _saturatef(toDisp(lerp1(b, s.z, w))));
+}
+
+__DEVICE__ float hash01(uint x, uint y, uint z)
+{
+    x = x * 1664525u + 1013904223u; y = y * 1664525u + 1013904223u; z = z * 1664525u + 1013904223u;
+    x += y * z; y += z * x; z += x * y;
+    x ^= x >> 16u; y ^= y >> 16u; z ^= z >> 16u;
+    x += y * z; y += z * x; z += x * y;
+    return (float)(x >> 8u) * (1.0f / 16777216.0f);
+}
+
+__DEVICE__ float fade(float t) { return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f); }
+
+__DEVICE__ float vnoise3(float x, float y, float z, uint s)
+{
+    int ix = (int)(x), iy = (int)(y), iz = (int)(z);
+    float tx = fade(x - (float)(ix)), ty = fade(y - (float)(iy)), tz = fade(z - (float)(iz));
+    uint x0 = (uint)(ix), y0 = (uint)(iy), z0 = (uint)(iz) + s * 7919u;
+    float a0 = lerp1(lerp1(hash01(x0, y0, z0), hash01(x0 + 1u, y0, z0), tx), lerp1(hash01(x0, y0 + 1u, z0), hash01(x0 + 1u, y0 + 1u, z0), tx), ty);
+    float a1 = lerp1(lerp1(hash01(x0, y0, z0 + 1u), hash01(x0 + 1u, y0, z0 + 1u), tx), lerp1(hash01(x0, y0 + 1u, z0 + 1u), hash01(x0 + 1u, y0 + 1u, z0 + 1u), tx), ty);
+    return lerp1(a0, a1, tz);
+}
+
+__DEVICE__ float fbm(float x, float y, float z, int n, uint s)
+{
+    float sum = 0.0f, amp = 0.5f, tot = 0.0f, f = 1.0f;
+    for (int i = 0; i < 5; i++) {
+        if (i >= n) break;
+        sum += amp * vnoise3(x * f + 4096.0f + 37.1f * (float)(i), y * f + 4096.0f + 11.7f * (float)(i), z * f + 4096.0f, s + (uint)(i));
+        tot += amp; amp *= 0.5f; f *= 2.03f;
+    }
+    float v = sum / tot;
+    return _saturatef((v - 0.5f) * 1.6f + 0.5f);
+}
+
+__DEVICE__ float3 ramp(float pal, float t, float age)
+{
+    int p = (int)(pal + 0.5f);
+    float c0r = 0.30f, c0g = 0.10f, c0b = 0.42f, c1r = 0.62f, c1g = 0.35f, c1b = 0.47f, c2r = 0.86f, c2g = 0.76f, c2b = 0.68f;
+    float h0r = 0.73f, h0g = 0.16f, h0b = 0.26f, h1r = 0.89f, h1g = 0.35f, h1b = 0.17f, h2r = 0.94f, h2g = 0.50f, h2b = 0.22f;
+    if (p == 1) {
+        c0r = 0.45f; c0g = 0.08f; c0b = 0.05f; c1r = 0.85f; c1g = 0.30f; c1b = 0.08f; c2r = 0.98f; c2g = 0.70f; c2b = 0.35f;
+        h0r = 0.80f; h0g = 0.20f; h0b = 0.04f; h1r = 0.98f; h1g = 0.55f; h1b = 0.12f; h2r = 1.00f; h2g = 0.85f; h2b = 0.55f;
+    }
+    if (p == 2) {
+        c0r = 0.18f; c0g = 0.10f; c0b = 0.45f; c1r = 0.65f; c1g = 0.25f; c1b = 0.65f; c2r = 0.95f; c2g = 0.70f; c2b = 0.75f;
+        h0r = 0.70f; h0g = 0.15f; h0b = 0.50f; h1r = 0.95f; h1g = 0.45f; h1b = 0.45f; h2r = 1.00f; h2g = 0.75f; h2b = 0.55f;
+    }
+    if (p == 3) {
+        c0r = 0.05f; c0g = 0.10f; c0b = 0.35f; c1r = 0.15f; c1g = 0.40f; c1b = 0.75f; c2r = 0.70f; c2g = 0.85f; c2b = 0.98f;
+        h0r = 0.10f; h0g = 0.25f; h0b = 0.60f; h1r = 0.35f; h1g = 0.65f; h1b = 0.95f; h2r = 0.85f; h2g = 0.95f; h2b = 1.00f;
+    }
+    float a = _saturatef(age);
+    float r0 = lerp1(c0r, h0r, a), g0 = lerp1(c0g, h0g, a), b0 = lerp1(c0b, h0b, a);
+    float r1 = lerp1(c1r, h1r, a), g1 = lerp1(c1g, h1g, a), b1 = lerp1(c1b, h1b, a);
+    float r2 = lerp1(c2r, h2r, a), g2 = lerp1(c2g, h2g, a), b2 = lerp1(c2b, h2b, a);
+    float u = _saturatef(t);
+    float r, g, b;
+    if (u < 0.5f) { float k = u * 2.0f; r = lerp1(r0, r1, k); g = lerp1(g0, g1, k); b = lerp1(b0, b1, k); }
+    else { float k = u * 2.0f - 1.0f; r = lerp1(r1, r2, k); g = lerp1(g1, g2, k); b = lerp1(b1, b2, k); }
+    float hot = sstep(1.0f, 1.4f, t);
+    return make_float3(toLin(lerp1(r, 1.0f, hot)), toLin(lerp1(g, 0.96f, hot)), toLin(lerp1(b, 0.90f, hot)));
+}
+
+__DEVICE__ float leakField(float x, float y, float aspect, float deg, float w, float sc, float z, uint s)
+{
+    float a = deg * 0.0174533f, ca = _cosf(a), sa = _sinf(a);
+    float ext = 0.5f * (_fabs(ca) * aspect + _fabs(sa));
+    float sproj = (x - 0.5f * aspect) * ca + (y - 0.5f) * sa;
+    float warp = fbm(x * 1.3f, y * 1.3f, z * 0.35f, 2, s + 40u) - 0.5f;
+    float d = _fmaxf(ext - sproj + 0.45f * warp * w * aspect, 0.0f);
+    float reach = _fmaxf(w * aspect, 0.02f);
+    float e = _expf(-(d / reach) * (d / reach));
+    float cloud = fbm(x / sc, y / sc, z, 3, s);
+    return _saturatef(e * (0.35f + 1.3f * cloud));
+}
+
+__DEVICE__ float burnHeat(float x, float y, float cover, float sc, float z, uint s)
+{
+    float wx = fbm(x / sc * 0.7f, y / sc * 0.7f, z * 0.6f, 2, s + 90u) - 0.5f;
+    float wy = fbm(x / sc * 0.7f + 31.0f, y / sc * 0.7f, z * 0.6f, 2, s + 91u) - 0.5f;
+    float h = fbm((x + 0.6f * wx) / sc, (y + 0.6f * wy) / sc, z, 4, s);
+    float th = 1.0f - cover;
+    return _saturatef((h - th + 0.28f) / 0.62f);
+}
+
+__DEVICE__ float dust(int px, int py, int h, float amount, uint z)
+{
+    float sc = (float)(h) / 1080.0f;
+    int cx = (int)((float)(px) / (2.5f * sc)), cy = (int)((float)(py) / (2.5f * sc));
+    float r = hash01((uint)(cx), (uint)(cy), z * 13u + 5u);
+    float lim = 0.00002f * amount;
+    if (r > lim) return 0.0f;
+    return hash01((uint)(cx), (uint)(cy), z * 13u + 6u) < 0.6f ? -1.0f : 1.0f;
+}
+
+__DEVICE__ float4 burnOver(float r, float g, float b, float x, float y, float aspect, int px, int py, int ph,
+                           float cover, float pal, float age, float sc, float show, float grain, float dst,
+                           float z, uint fz, uint s)
+{
+    float k = sstep(0.0f, 0.35f, burnHeat(x, y, cover, sc, z, s));
+    uint zi = (uint)(z + 1000.0f);
+    float ang = 6.2831853f * ((float)(zi % 1000u) * 0.37f + 0.25f * hash01(zi, s, 71u));
+    float ca = _cosf(ang), sa = _sinf(ang), ext = 0.5f * (_fabs(ca) * aspect + _fabs(sa));
+    float band = 0.5f + 0.5f * ((x - 0.5f * aspect) * ca + (y - 0.5f) * sa) / ext;
+    float cl = fbm(x / (sc * 1.6f), y / (sc * 1.6f), z, 3, s + 200u);
+    float t = 0.05f + 0.95f * _saturatef(0.8f * band + 0.95f * (cl - 0.5f) + 0.15f);
+    float3 c = ramp(pal, t, age);
+    float keep = lerp1(1.0f, show, k);
+    float gr = 1.0f + grain * 0.22f * (hash01((uint)(px), (uint)(py), fz * 3u + s) - 0.5f) * k;
+    float d = dust(px, py, ph, dst * 100.0f, fz + s) * k;
+    float rr = (r * keep + c.x * k) * gr, gg = (g * keep + c.y * k) * gr, bb = (b * keep + c.z * k) * gr;
+    if (d < 0.0f) { rr *= 0.15f; gg *= 0.12f; bb *= 0.12f; }
+    if (d > 0.0f) { rr = rr + 0.6f; gg = gg + 0.55f; bb = bb + 0.45f; }
+    return make_float4(rr, gg, bb, k);
+}
+// Develop glitch: shared code of the glitch effects, on top of light.h's hash and helpers. MIT License.
+
+__DEVICE__ int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+__DEVICE__ float3 rgbAt(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int x, int y, int w, int h)
+{
+    int cx = clampi(x, 0, w - 1), cy = clampi(y, 0, h - 1);
+    return make_float3(_tex2D(tr, cx, cy), _tex2D(tg, cx, cy), _tex2D(tb, cx, cy));
+}
+
+__DEVICE__ float lumaAt(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int x, int y, int w, int h)
+{
+    float3 c = rgbAt(tr, tg, tb, x, y, w, h);
+    return luma(c.x, c.y, c.z);
+}
+
+__DEVICE__ float rnd3(int a, int b, uint c) { return hash01((uint)(a + 65536), (uint)(b + 65536), c); }
+
+__DEVICE__ float bayer8(int cx, int cy)
+{
+    int bx = cx & 7, by = cy & 7, xr = bx ^ by;
+    int v = ((xr & 1) << 5) | ((by & 1) << 4) | ((xr & 2) << 2) | ((by & 2) << 1) | ((xr & 4) >> 1) | ((by & 4) >> 2);
+    return ((float)(v) + 0.5f) / 64.0f;
+}
+
+__DEVICE__ float3 gritFinish(float3 c, int x, int y, int h, float g, float grit, float dith, uint seed)
+{
+    if (g <= 0.0f) return c;
+    float L = luma(c.x, c.y, c.z);
+    float n = hash01((uint)(x + 65536), (uint)(y + 65536), seed) - 0.5f;
+    float gr = grit * g * 0.16f * (0.35f + 0.65f * L) * n;
+    float r = c.x + gr, gg = c.y + gr, b = c.z + gr;
+    float d = dith * g;
+    if (d > 0.0f) {
+        int cell = (int)(2.0f * (float)(h) / 1080.0f + 0.5f);
+        if (cell < 1) cell = 1;
+        float t = bayer8((int)(x / cell), (int)(y / cell));
+        float lv = 32.0f * (1.0f - d) + 3.0f * d - 1.0f;
+        r = _floorf(_saturatef(r) * lv + t) / lv; gg = _floorf(_saturatef(gg) * lv + t) / lv; b = _floorf(_saturatef(b) * lv + t) / lv;
+    }
+    return make_float3(_saturatef(r), _saturatef(gg), _saturatef(b));
+}
+
+__DEVICE__ float3 chromaBleed(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, float3 c, int x, int y, int w, int h, int k)
+{
+    if (k < 1) return c;
+    float3 a = rgbAt(tr, tg, tb, x - k, y, w, h), b = rgbAt(tr, tg, tb, x - (int)(k / 2), y, w, h);
+    float3 m = make_float3((a.x + b.x + c.x) / 3.0f, (a.y + b.y + c.y) / 3.0f, (a.z + b.z + c.z) / 3.0f);
+    float L = luma(c.x, c.y, c.z), Lm = luma(m.x, m.y, m.z);
+    return make_float3(m.x - Lm + L, m.y - Lm + L, m.z - Lm + L);
+}
+
+__DEVICE__ int mirL(int i, int n)
+{
+    int q = 2 * n, m = i % q;
+    if (m < 0) m += q;
+    if (m >= n) m = q - 1 - m;
+    return clampi(m, 0, n - 1);
+}
+
+__DEVICE__ float3 bilL(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, float fx, float fy, int w, int h)
+{
+    float bx = _floorf(fx), by = _floorf(fy);
+    float ax = fx - bx, ay = fy - by;
+    int x0 = (int)(bx), y0 = (int)(by);
+    int xa = mirL(x0, w), xb = mirL(x0 + 1, w), ya = mirL(y0, h), yb = mirL(y0 + 1, h);
+    float3 c00 = make_float3(_tex2D(tr, xa, ya), _tex2D(tg, xa, ya), _tex2D(tb, xa, ya));
+    if (ax == 0.0f && ay == 0.0f) return c00;
+    float3 c10 = make_float3(_tex2D(tr, xb, ya), _tex2D(tg, xb, ya), _tex2D(tb, xb, ya));
+    float3 c01 = make_float3(_tex2D(tr, xa, yb), _tex2D(tg, xa, yb), _tex2D(tb, xa, yb));
+    float3 c11 = make_float3(_tex2D(tr, xb, yb), _tex2D(tg, xb, yb), _tex2D(tb, xb, yb));
+    return make_float3(lerp1(lerp1(c00.x, c10.x, ax), lerp1(c01.x, c11.x, ax), ay),
+                       lerp1(lerp1(c00.y, c10.y, ax), lerp1(c01.y, c11.y, ax), ay),
+                       lerp1(lerp1(c00.z, c10.z, ax), lerp1(c01.z, c11.z, ax), ay));
+}
+
+__DEVICE__ float3 linL(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, float fx, float fy, int w, int h)
+{
+    float3 c = bilL(tr, tg, tb, fx, fy, w, h);
+    return make_float3(toLin(c.x), toLin(c.y), toLin(c.z));
+}
+
+__DEVICE__ float aperture(float a, float n, float rot, float rnd)
+{
+    if (n < 3.0f) return 1.0f;
+    float seg = 6.2831853f / n;
+    float t = a - rot;
+    float m = t - seg * _floorf(t / seg) - 0.5f * seg;
+    float poly = _cosf(0.5f * seg) / _cosf(m);
+    return lerp1(poly, 1.0f, rnd);
+}
+
+__DEVICE__ float3 specL(float t)
+{
+    float a = 6.2831853f * t;
+    float r = 0.5f + 0.5f * _cosf(a), g = 0.5f + 0.5f * _cosf(a - 2.0943951f), b = 0.5f + 0.5f * _cosf(a - 4.1887902f);
+    return make_float3(r * r * r, g * g * g, b * b * b);
+}
+
+__DEVICE__ float3 mixAtX(__TEXTURE__ ar, __TEXTURE__ ag, __TEXTURE__ ab, __TEXTURE__ br, __TEXTURE__ bg, __TEXTURE__ bb,
+                         int x, int y, int W, int H, float w)
+{
+    if (w <= 0.0f) return rgbAt(ar, ag, ab, x, y, W, H);
+    if (w >= 1.0f) return rgbAt(br, bg, bb, x, y, W, H);
+    float3 a = rgbAt(ar, ag, ab, x, y, W, H), b = rgbAt(br, bg, bb, x, y, W, H);
+    return make_float3(lerp1(a.x, b.x, w), lerp1(a.y, b.y, w), lerp1(a.z, b.z, w));
+}
+
+__DEVICE__ float mixLumaX(__TEXTURE__ ar, __TEXTURE__ ag, __TEXTURE__ ab, __TEXTURE__ br, __TEXTURE__ bg, __TEXTURE__ bb,
+                          int x, int y, int W, int H, float w)
+{
+    float3 c = mixAtX(ar, ag, ab, br, bg, bb, x, y, W, H, w);
+    return luma(_saturatef(c.x), _saturatef(c.y), _saturatef(c.z));
+}
+
+__DEVICE__ float3 crushX(float3 c, int x, int y, int h, float g, float grit, float dith, uint seed)
+{
+    if (g <= 0.0f) return c;
+    float L = luma(_saturatef(c.x), _saturatef(c.y), _saturatef(c.z));
+    float n = hash01((uint)(x + 65536), (uint)(y + 65536), seed) - 0.5f;
+    float gr = grit * 0.2f * (0.1f + 0.9f * L) * n;
+    float r = _saturatef(c.x + gr), gg = _saturatef(c.y + gr), b = _saturatef(c.z + gr);
+    if (dith > 0.0f) {
+        int cell = (int)(2.0f * (float)(h) / 1080.0f + 0.5f);
+        if (cell < 1) cell = 1;
+        float t = bayer8((int)(x / cell), (int)(y / cell));
+        float lv = 32.0f * (1.0f - dith) + 3.0f * dith - 1.0f;
+        r = _fminf(_floorf(r * lv + t), lv) / lv; gg = _fminf(_floorf(gg * lv + t), lv) / lv; b = _fminf(_floorf(b * lv + t), lv) / lv;
+    }
+    float k = _saturatef(g);
+    return make_float3(lerp1(c.x, r, k), lerp1(c.y, gg, k), lerp1(c.z, b, k));
+}
+
+__DEVICE__ float3 sortX(__TEXTURE__ ar, __TEXTURE__ ag, __TEXTURE__ ab, __TEXTURE__ br, __TEXTURE__ bg, __TEXTURE__ bb,
+                        int x, int y, int W, int H, float w, float lo, float hi, int L, int dx, int dy, uint seed)
+{
+    float3 c0 = mixAtX(ar, ag, ab, br, bg, bb, x, y, W, H, w);
+    float l0 = luma(_saturatef(c0.x), _saturatef(c0.y), _saturatef(c0.z));
+    if (l0 < lo || l0 > hi) return c0;
+    int pos = dx != 0 ? x : y, len = dx != 0 ? W : H;
+    int line = dx != 0 ? y : x;
+    int off = (int)(hash01((uint)(line + 1), 17u, seed) * (float)(L));
+    int c0p = (int)((pos + off) / L) * L - off, c1p = c0p + L - 1;
+    if (c0p < 0) c0p = 0;
+    if (c1p > len - 1) c1p = len - 1;
+    int s = pos, e = pos;
+    for (int k = 0; k < 256; k++) {
+        if (s - 1 < c0p) break;
+        int q = s - 1;
+        float lq = mixLumaX(ar, ag, ab, br, bg, bb, dx != 0 ? q : x, dx != 0 ? y : q, W, H, w);
+        if (lq < lo || lq > hi) break;
+        s = q;
+    }
+    for (int k = 0; k < 256; k++) {
+        if (e + 1 > c1p) break;
+        int q = e + 1;
+        float lq = mixLumaX(ar, ag, ab, br, bg, bb, dx != 0 ? q : x, dx != 0 ? y : q, W, H, w);
+        if (lq < lo || lq > hi) break;
+        e = q;
+    }
+    if (e - s < 1) return c0;
+    int rank = (dx + dy) > 0 ? pos - s : e - pos;
+    float a = lo, b = hi + 1e-4f;
+    for (int it = 0; it < 11; it++) {
+        float m = 0.5f * (a + b);
+        int cnt = 0;
+        for (int q = s; q <= e; q++) {
+            if (mixLumaX(ar, ag, ab, br, bg, bb, dx != 0 ? q : x, dx != 0 ? y : q, W, H, w) < m) cnt += 1;
+        }
+        if (cnt <= rank) a = m; else b = m;
+    }
+    float3 got = c0;
+    for (int q = s; q <= e; q++) {
+        float3 c = mixAtX(ar, ag, ab, br, bg, bb, dx != 0 ? q : x, dx != 0 ? y : q, W, H, w);
+        float l = luma(_saturatef(c.x), _saturatef(c.y), _saturatef(c.z));
+        if (l >= a && l < b) { got = c; break; }
+    }
+    return got;
+}
+
+__DEVICE__ float tradeX(int x, int y, int cs, uint seed)
+{
+    int cx = (int)(x / cs), cy = (int)(y / cs);
+    return lerp1(hash01((uint)(cx + 65536), (uint)(cy + 65536), seed), bayer8(cx, cy), 0.55f);
+}
+
+__DEVICE__ float mapX(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, float fx, float fy, float r, int W, int H)
+{
+    float s = 0.0f;
+    for (int i = 0; i < 7; i++) {
+        float a = 0.8975979f * (float)(i), rr = i == 0 ? 0.0f : r;
+        float3 c = bilL(tr, tg, tb, fx + rr * _cosf(a), fy + rr * _sinf(a), W, H);
+        s += luma(_saturatef(c.x), _saturatef(c.y), _saturatef(c.z));
+    }
+    return s / 7.0f;
+}
+
+__DEVICE__ float3 splitX(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int x, int y, int W, int H, float d, float a0)
+{
+    float fx = (float)(x), fy = (float)(y);
+    float3 cr = bilL(tr, tg, tb, fx + d * _cosf(a0), fy + d * _sinf(a0), W, H);
+    float3 cg = bilL(tr, tg, tb, fx + 0.8f * d * _cosf(a0 + 2.0943951f), fy + 0.8f * d * _sinf(a0 + 2.0943951f), W, H);
+    float3 cb = bilL(tr, tg, tb, fx + 1.2f * d * _cosf(a0 + 4.1887902f), fy + 1.2f * d * _sinf(a0 + 4.1887902f), W, H);
+    return make_float3(cr.x, cg.y, cb.z);
+}
+
+__DEVICE__ float3 blockX(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int x0, int y0, int S, int W, int H)
+{
+    float r = 0.0f, g = 0.0f, b = 0.0f;
+    for (int j = 0; j < 4; j++) {
+        for (int i = 0; i < 4; i++) {
+            float3 c = rgbAt(tr, tg, tb, x0 + (int)(((float)(i) + 0.5f) * (float)(S) / 4.0f), y0 + (int)(((float)(j) + 0.5f) * (float)(S) / 4.0f), W, H);
+            r += c.x; g += c.y; b += c.z;
+        }
+    }
+    return make_float3(r / 16.0f, g / 16.0f, b / 16.0f);
+}
+
+__DEVICE__ float4 transition(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_FromTexR, __TEXTURE__ p_FromTexG, __TEXTURE__ p_FromTexB, __TEXTURE__ p_FromTexA, __TEXTURE__ p_ToTexR, __TEXTURE__ p_ToTexG, __TEXTURE__ p_ToTexB, __TEXTURE__ p_ToTexA)
+{
+    float p = _saturatef(TRANSITION_PROGRESS);
+    float da = _tex2D(p_FromTexR, p_X, p_Y), dg = _tex2D(p_FromTexG, p_X, p_Y), db = _tex2D(p_FromTexB, p_X, p_Y);
+    float ea = _tex2D(p_ToTexR, p_X, p_Y), eg = _tex2D(p_ToTexG, p_X, p_Y), eb = _tex2D(p_ToTexB, p_X, p_Y);
+    if (p <= 0.0f) return make_float4(da, dg, db, 1.0f);
+    if (p >= 1.0f) return make_float4(ea, eg, eb, 1.0f);
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float hh = (float)(H), sc = hh / 1080.0f, aspect = (float)(W) / hh;
+    int st = (int)(gxStyle + 0.5f);
+    uint seed = (uint)(gxSeed) * 131u + 11u;
+    float amt = gxAmount / 100.0f, sz = gxSize / 100.0f, grit = gxGrit / 100.0f, dith = gxDither / 100.0f;
+    float ang = gxAngle * 0.0174533f;
+    float taper = sstep(0.0f, 0.12f, p) * sstep(0.0f, 0.12f, 1.0f - p);
+    float sn = _sinf(3.1415927f * p), env = sn * sn * taper;
+    float bl = 0.015f + 0.3f * gxBlend / 100.0f;
+    float swap = sstep(0.5f - bl, 0.5f + bl, p);
+    uint fz = (uint)(p * 991.0f) * 5u + seed;
+    float3 o = make_float3(lerp1(da, ea, swap), lerp1(dg, eg, swap), lerp1(db, eb, swap));
+    float g = 0.0f;
+    float ca = _cosf(ang), sa = _sinf(ang);
+    float ext = 0.5f * (_fabs(ca) * aspect + _fabs(sa));
+    float fxh = ((float)(x) + 0.5f) / hh, fyh = ((float)(y) + 0.5f) / hh;
+    float u = ((fxh - 0.5f * aspect) * ca + (fyh - 0.5f) * sa) / (2.0f * ext) + 0.5f;
+
+    if (st == 0) {
+        float e = env * amt;
+        if (e > 0.0f) {
+            float lo = lerp1(1.05f, gxThresh / 100.0f, e), hi = 1.001f;
+            int L = (int)((12.0f + 500.0f * sz * sz) * sc * e) + 2;
+            if (L > 256) L = 256;
+            int dir = (int)((gxAngle + 45.0f) / 90.0f) % 4;
+            int dx = dir == 0 ? 1 : (dir == 2 ? -1 : 0), dy = dir == 1 ? 1 : (dir == 3 ? -1 : 0);
+            float3 s = sortX(p_FromTexR, p_FromTexG, p_FromTexB, p_ToTexR, p_ToTexG, p_ToTexB, x, y, W, H, swap, lo, hi, L, dx, dy, seed + 3u);
+            float l0 = luma(_saturatef(o.x), _saturatef(o.y), _saturatef(o.z));
+            float k = sstep(lo, lo + 0.05f, l0);
+            o = make_float3(lerp1(o.x, s.x, k), lerp1(o.y, s.y, k), lerp1(o.z, s.z, k));
+            g = e * k;
+        }
+    } else if (st == 1 || st == 2) {
+        int cs = (int)(2.0f * sc + 0.5f);
+        if (cs < 1) cs = 1;
+        float c, thw;
+        if (st == 1) {
+            c = sstep(0.12f, 0.88f, p);
+            thw = env;
+        } else {
+            float bw = 0.03f + 0.5f * gxSoft / 100.0f;
+            float f = -bw + (1.0f + 2.0f * bw) * sstep(0.0f, 1.0f, p);
+            c = _saturatef(0.5f + (f - u) / bw);
+            thw = 4.0f * c * (1.0f - c) * taper;
+        }
+        float th = tradeX(x, y, cs, seed + 5u);
+        int toB = th < c ? 1 : 0;
+        float R = (3.0f + 70.0f * sz) * sc * thw * amt;
+        float ra = 6.2831853f * hash01((uint)(x + 65536), (uint)(y + 65536), seed + 6u);
+        float rq = hash01((uint)(x + 65536), (uint)(y + 65536), seed + 7u);
+        float rd = R * rq * rq * rq;
+        int sx = x + (int)(_floorf(rd * _cosf(ra) + 0.5f)), sy = y + (int)(_floorf(rd * _sinf(ra) + 0.5f));
+        o = toB == 1 ? rgbAt(p_ToTexR, p_ToTexG, p_ToTexB, sx, sy, W, H) : rgbAt(p_FromTexR, p_FromTexG, p_FromTexB, sx, sy, W, H);
+        g = thw * amt;
+    } else if (st == 3) {
+        float w = 0.04f + 0.3f * gxSoft / 100.0f;
+        float f = -2.0f * w + (1.0f + 4.0f * w) * sstep(0.0f, 1.0f, p);
+        int base = (int)((0.5f + 1.5f * sz) * sc + 0.5f);
+        if (base < 1) base = 1;
+        float smax = (float)(base) * 80.0f * amt * taper;
+        int toB = u < f ? 1 : 0;
+        o = toB == 1 ? make_float3(ea, eg, eb) : make_float3(da, dg, db);
+        for (int k = 6; k >= 1; k--) {
+            int S = base * (1 << k);
+            int bx = (int)(x / S), by = (int)(y / S);
+            float cxh = ((float)(bx * S) + 0.5f * (float)(S)) / hh, cyh = ((float)(by * S) + 0.5f * (float)(S)) / hh;
+            float uc = ((cxh - 0.5f * aspect) * ca + (cyh - 0.5f) * sa) / (2.0f * ext) + 0.5f;
+            float d = (uc - f) / w;
+            float want = smax * _expf(-d * d) * (1.0f - sstep(1.4f, 2.0f, _fabs(d)));
+            if (want >= (float)(S)) {
+                float jt = (hash01((uint)(bx + 65536), (uint)(by + 65536), seed + 8u + (uint)(k)) - 0.5f) * 0.9f * w;
+                int bB = uc + jt < f ? 1 : 0;
+                o = bB == 1 ? blockX(p_ToTexR, p_ToTexG, p_ToTexB, bx * S, by * S, S, W, H) : blockX(p_FromTexR, p_FromTexG, p_FromTexB, bx * S, by * S, S, W, H);
+                g = _saturatef(want / smax + 0.35f) * amt * taper;
+                break;
+            }
+        }
+    } else {
+        float D = (0.002f + 0.03f * sz) * hh * env * amt;
+        if (D > 0.0f) {
+            float rm = 10.0f * sc, fx = (float)(x), fy = (float)(y);
+            float3 a = make_float3(da, dg, db), b = make_float3(ea, eg, eb);
+            if (swap < 1.0f) {
+                float m = mapX(p_ToTexR, p_ToTexG, p_ToTexB, fx, fy, rm, W, H);
+                a = splitX(p_FromTexR, p_FromTexG, p_FromTexB, x, y, W, H, D * (m - 0.4f) * 2.0f, ang);
+            }
+            if (swap > 0.0f) {
+                float m = mapX(p_FromTexR, p_FromTexG, p_FromTexB, fx, fy, rm, W, H);
+                b = splitX(p_ToTexR, p_ToTexG, p_ToTexB, x, y, W, H, D * (m - 0.4f) * 2.0f, ang + 3.1415927f);
+            }
+            o = make_float3(lerp1(a.x, b.x, swap), lerp1(a.y, b.y, swap), lerp1(a.z, b.z, swap));
+            g = env * amt;
+        }
+    }
+    o = crushX(o, x, y, H, g, grit, dith, fz);
+    return make_float4(o.x, o.y, o.z, 1.0f);
+}

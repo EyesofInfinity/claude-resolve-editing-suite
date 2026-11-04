@@ -1,0 +1,44 @@
+{
+  "Name": "DevelopTransient",
+  "Version": "1.0.0",
+  "Factory Info": {
+    "Vendor": "Develop",
+    "URL": "",
+    "E-Mail": "",
+    "Flags": {
+      "Unicode": true,
+      "Classes Discardable": false,
+      "Component Non Discardable": false,
+    },
+  },
+  "Classes": [
+    {
+      "CID": "C1F699C2CA574700838652466113C70D",
+      "Category": "Audio Module Class",
+      "Name": "Develop Transient",
+      "Vendor": "Develop",
+      "Version": "1.0.0",
+      "SDKVersion": "VST 3.8.1",
+      "Sub Categories": [
+        "Fx",
+        "Dynamics",
+      ],
+      "Class Flags": 1,
+      "Cardinality": 2147483647,
+      "Snapshots": [
+      ],
+    },
+    {
+      "CID": "EC4ECC38F1E84579A0BA01F06DDB852D",
+      "Category": "Component Controller Class",
+      "Name": "Develop Transient Controller",
+      "Vendor": "Develop",
+      "Version": "1.0.0",
+      "SDKVersion": "VST 3.8.1",
+      "Class Flags": 0,
+      "Cardinality": 2147483647,
+      "Snapshots": [
+      ],
+    },
+  ],
+}

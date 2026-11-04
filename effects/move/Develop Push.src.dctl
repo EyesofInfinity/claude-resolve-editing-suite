@@ -1,0 +1,191 @@
+// Develop Push: whip, push and cut transitions in one Transition DCTL. Five styles:
+//   0 Swish: a whip (7 to 9 frames of motion blur bridging both shots). The
+//     outgoing shot speeds off along Angle, the cut lands on the blurriest frame, the incoming shot slows in from the
+//     other side; the blur follows the speed and the light in it glows.
+//   1 Film Whip: the two shots one after the other on a strip of film pulled through the gate, a dark frame line
+//     between them with a red edge where light leaks onto the film's edge, all of it motion blurred.
+//   2 Hyper Push: a push into the outgoing shot with radial blur, the incoming shot arriving from the same push.
+//   3 Hyper Pull: the same pulled back, the frame's mirrored edges filling as it shrinks.
+//   4 Flutter Cut: the two shots stuttering against each other on beats, jolted and flashed, the incoming taking over.
+// Every style starts exactly on the outgoing shot and ends exactly on the incoming one. Sampling is bilinear with
+// mirrored edges; light is blurred and glowed in linear (Rec.709 gamma 2.4). Lay Swish 7 to 9 frames, the zooms
+// 10 to 16. MIT License.
+
+DEFINE_UI_PARAMS(puStyle,  Style,       DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 4.0, 1.0)
+DEFINE_UI_PARAMS(puAngle,  Angle,       DCTLUI_SLIDER_FLOAT, 180.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(puTravel, Travel,      DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(puBlur,   Blur,        DCTLUI_SLIDER_FLOAT, 70.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(puGlow,   Glow,        DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(puEdge,   Film Edge,   DCTLUI_SLIDER_FLOAT, 60.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(puBeats,  Beats,       DCTLUI_SLIDER_FLOAT, 8.0, 3.0, 16.0, 1.0)
+DEFINE_UI_PARAMS(puSeed,   Seed,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Style, "0 Swish (a whip, lay it 7 to 9 frames), 1 Film Whip, 2 Hyper Push, 3 Hyper Pull, 4 Flutter Cut")
+DEFINE_UI_TOOLTIP(Angle, "The way the picture moves: 0 right, 90 down, 180 left, 270 up")
+DEFINE_UI_TOOLTIP(Film Edge, "Film Whip: the red light on the frame line's edge")
+DEFINE_UI_TOOLTIP(Beats, "Flutter Cut: how many beats the stutter is cut into")
+
+#include "../light/light.h"
+#include "../glitch/glitch.h"
+
+__DEVICE__ int mirrorI(int i, int n)
+{
+    int q = 2 * n, m = i % q;
+    if (m < 0) m += q;
+    if (m >= n) m = q - 1 - m;
+    return clampi(m, 0, n - 1);
+}
+
+__DEVICE__ float3 bil(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, float fx, float fy, int w, int h)
+{
+    float bx = _floorf(fx), by = _floorf(fy);
+    float ax = fx - bx, ay = fy - by;
+    int x0 = (int)(bx), y0 = (int)(by);
+    int xa = mirrorI(x0, w), xb = mirrorI(x0 + 1, w), ya = mirrorI(y0, h), yb = mirrorI(y0 + 1, h);
+    float3 c00 = make_float3(_tex2D(tr, xa, ya), _tex2D(tg, xa, ya), _tex2D(tb, xa, ya));
+    if (ax == 0.0f && ay == 0.0f) return c00;
+    float3 c10 = make_float3(_tex2D(tr, xb, ya), _tex2D(tg, xb, ya), _tex2D(tb, xb, ya));
+    float3 c01 = make_float3(_tex2D(tr, xa, yb), _tex2D(tg, xa, yb), _tex2D(tb, xa, yb));
+    float3 c11 = make_float3(_tex2D(tr, xb, yb), _tex2D(tg, xb, yb), _tex2D(tb, xb, yb));
+    float r = lerp1(lerp1(c00.x, c10.x, ax), lerp1(c01.x, c11.x, ax), ay);
+    float g = lerp1(lerp1(c00.y, c10.y, ax), lerp1(c01.y, c11.y, ax), ay);
+    float b = lerp1(lerp1(c00.z, c10.z, ax), lerp1(c01.z, c11.z, ax), ay);
+    return make_float3(r, g, b);
+}
+
+__DEVICE__ float3 lineBlur(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, float fx, float fy, float dx, float dy, float len, int w, int h)
+{
+    if (len < 0.5f) {
+        float3 c = bil(tr, tg, tb, fx, fy, w, h);
+        return make_float3(toLin(c.x), toLin(c.y), toLin(c.z));
+    }
+    float r = 0.0f, g = 0.0f, b = 0.0f;
+    for (int i = 0; i < 24; i++) {
+        float t = ((float)(i) + 0.5f) / 24.0f - 0.5f;
+        float3 c = bil(tr, tg, tb, fx + dx * t * len, fy + dy * t * len, w, h);
+        r += toLin(c.x); g += toLin(c.y); b += toLin(c.z);
+    }
+    return make_float3(r / 24.0f, g / 24.0f, b / 24.0f);
+}
+
+__DEVICE__ float3 zoomBlur(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, float x, float y, float s, float k, int w, int h)
+{
+    float cx = 0.5f * (float)(w) - 0.5f, cy = 0.5f * (float)(h) - 0.5f;
+    float ux = (x - cx) / s, uy = (y - cy) / s;
+    if (k < 0.002f) {
+        float3 c = bil(tr, tg, tb, cx + ux, cy + uy, w, h);
+        return make_float3(toLin(c.x), toLin(c.y), toLin(c.z));
+    }
+    float r = 0.0f, g = 0.0f, b = 0.0f;
+    for (int i = 0; i < 24; i++) {
+        float f = 1.0f - k * ((float)(i) + 0.5f) / 24.0f;
+        float3 c = bil(tr, tg, tb, cx + ux * f, cy + uy * f, w, h);
+        r += toLin(c.x); g += toLin(c.y); b += toLin(c.z);
+    }
+    return make_float3(r / 24.0f, g / 24.0f, b / 24.0f);
+}
+
+__DEVICE__ float3 glowed(float3 l, float w, float glow)
+{
+    float k = glow * w;
+    if (k <= 0.0f) return l;
+    float L = luma(l.x, l.y, l.z), hot = _fmaxf(L - 0.25f, 0.0f) * 1.8f * k;
+    float lift = 0.12f * k * w * w;
+    return make_float3(l.x * (1.0f + hot) + lift, l.y * (1.0f + hot) + lift, l.z * (1.0f + hot) + lift * 0.95f);
+}
+
+__DEVICE__ float4 transition(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_FromTexR, __TEXTURE__ p_FromTexG, __TEXTURE__ p_FromTexB, __TEXTURE__ p_FromTexA, __TEXTURE__ p_ToTexR, __TEXTURE__ p_ToTexG, __TEXTURE__ p_ToTexB, __TEXTURE__ p_ToTexA)
+{
+    int W = p_Width, H = p_Height, x = p_X, y = p_Y;
+    float p = _saturatef(TRANSITION_PROGRESS);
+    int st = (int)(puStyle + 0.5f);
+    float fx = (float)(x), fy = (float)(y);
+    float an = puAngle * 0.0174533f, dx = _cosf(an), dy = _sinf(an);
+    float bell = _sinf(3.1415927f * p);
+    bell = bell * bell;
+    float glow = puGlow / 100.0f;
+    if (p <= 0.0f) { float3 a = rgbAt(p_FromTexR, p_FromTexG, p_FromTexB, x, y, W, H); return make_float4(a.x, a.y, a.z, 1.0f); }
+    if (p >= 1.0f) { float3 b = rgbAt(p_ToTexR, p_ToTexG, p_ToTexB, x, y, W, H); return make_float4(b.x, b.y, b.z, 1.0f); }
+    float3 l = make_float3(0.0f, 0.0f, 0.0f);
+    float k = 0.0f;
+    if (st == 0) {
+        float D = (0.15f + 1.35f * puTravel / 100.0f) * (float)(W);
+        float len = puBlur / 100.0f * 0.45f * (float)(W) * bell;
+        if (p < 0.5f) {
+            float u = p * 2.0f, o = D * u * u * u;
+            l = lineBlur(p_FromTexR, p_FromTexG, p_FromTexB, fx - dx * o, fy - dy * o, dx, dy, len, W, H);
+        } else {
+            float v = 2.0f - p * 2.0f, o = D * v * v * v;
+            l = lineBlur(p_ToTexR, p_ToTexG, p_ToTexB, fx + dx * o, fy + dy * o, dx, dy, len, W, H);
+        }
+        l = glowed(l, bell, glow);
+        k = bell;
+    } else if (st == 1) {
+        float ext = _fabs(dx) * (float)(W) + _fabs(dy) * (float)(H);
+        float gap = 0.12f * (float)(H), pitch = ext + gap;
+        float e = p * p * (3.0f - 2.0f * p), o = pitch * e;
+        float len = puBlur / 100.0f * 0.30f * ext * bell * 1.5f;
+        float cx = 0.5f * (float)(W), cy = 0.5f * (float)(H);
+        float sA = (fx - cx) * dx + (fy - cy) * dy - o;
+        float r = 0.0f, g = 0.0f, b = 0.0f;
+        int n = len < 0.5f ? 1 : 16;
+        for (int i = 0; i < 16; i++) {
+            if (i >= n) break;
+            float t = n == 1 ? 0.0f : (((float)(i) + 0.5f) / 16.0f - 0.5f) * len;
+            float s = sA + t;
+            float3 c;
+            if (s > -0.5f * ext) {
+                c = bil(p_FromTexR, p_FromTexG, p_FromTexB, fx - dx * o + dx * t, fy - dy * o + dy * t, W, H);
+            } else if (s > -0.5f * ext - gap) {
+                float q = (-0.5f * ext - s) / gap, e1 = (q - 0.12f) / 0.10f, e2 = (q - 0.88f) / 0.10f;
+                float edge = _expf(-e1 * e1) + 0.6f * _expf(-e2 * e2);
+                float er = puEdge / 100.0f * edge;
+                c = make_float3(0.03f + 0.85f * er, 0.02f + 0.20f * er, 0.02f + 0.08f * er);
+            } else {
+                c = bil(p_ToTexR, p_ToTexG, p_ToTexB, fx - dx * o + dx * t + dx * pitch, fy - dy * o + dy * t + dy * pitch, W, H);
+            }
+            r += toLin(c.x); g += toLin(c.y); b += toLin(c.z);
+        }
+        l = make_float3(r / (float)(n), g / (float)(n), b / (float)(n));
+        l = glowed(l, bell, glow * 0.6f);
+        k = bell;
+    } else if (st == 2 || st == 3) {
+        float Z = 1.0f + 3.0f * puTravel / 100.0f;
+        float kb = puBlur / 100.0f * 0.55f * bell;
+        if (p < 0.5f) {
+            float u = p * 2.0f, z = 1.0f + (Z - 1.0f) * u * u * u;
+            float s = st == 2 ? z : 1.0f / z;
+            l = zoomBlur(p_FromTexR, p_FromTexG, p_FromTexB, fx, fy, s, kb, W, H);
+        } else {
+            float v = 2.0f - p * 2.0f, z = 1.0f + (Z - 1.0f) * v * v * v;
+            float s = st == 2 ? z : 1.0f / z;
+            l = zoomBlur(p_ToTexR, p_ToTexG, p_ToTexB, fx, fy, s, kb, W, H);
+        }
+        l = glowed(l, bell, glow);
+        k = bell;
+    } else {
+        int nb = (int)(puBeats + 0.5f);
+        int i = (int)(p * (float)(nb));
+        if (i > nb - 1) i = nb - 1;
+        if (i == 0) { float3 a = rgbAt(p_FromTexR, p_FromTexG, p_FromTexB, x, y, W, H); return make_float4(a.x, a.y, a.z, 1.0f); }
+        if (i == nb - 1) { float3 b = rgbAt(p_ToTexR, p_ToTexG, p_ToTexB, x, y, W, H); return make_float4(b.x, b.y, b.z, 1.0f); }
+        uint sd = (uint)(puSeed) * 613u + 7u;
+        int ph = rnd3(0, 11, sd) < 0.5f ? 1 : 0, dbl = 1 + (int)(rnd3(0, 15, sd) * (float)(nb - 2));
+        int useB = ((i + ph + (i >= dbl ? 1 : 0)) & 1) == 1 ? 1 : 0;
+        float tr = 0.3f + puTravel / 100.0f;
+        float jo = (rnd3(i, 12, sd) - 0.5f) * 0.22f * (float)(H) * tr;
+        float jp = (rnd3(i, 13, sd) - 0.5f) * 0.08f * (float)(H) * tr;
+        float zs = 1.0f + 0.16f * tr * rnd3(i, 16, sd);
+        float ox = dx * jo - dy * jp, oy = dy * jo + dx * jp;
+        float cx = 0.5f * (float)(W) - 0.5f, cy = 0.5f * (float)(H) - 0.5f;
+        float sx = cx + (fx - ox - cx) / zs, sy = cy + (fy - oy - cy) / zs;
+        float len = _fabs(jo) * puBlur / 100.0f * 1.2f;
+        if (useB == 1) l = lineBlur(p_ToTexR, p_ToTexG, p_ToTexB, sx, sy, dx, dy, len, W, H);
+        else l = lineBlur(p_FromTexR, p_FromTexG, p_FromTexB, sx, sy, dx, dy, len, W, H);
+        float fl = 1.0f + glow * 1.6f * (rnd3(i, 14, sd) - 0.3f);
+        l = make_float3(l.x * fl, l.y * fl, l.z * fl);
+        k = 1.0f;
+    }
+    float3 o = lightOut(l.x, l.y, l.z, k);
+    return make_float4(o.x, o.y, o.z, 1.0f);
+}

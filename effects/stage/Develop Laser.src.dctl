@@ -1,0 +1,274 @@
+// Develop Laser: a beam, two kinds of arc and a muzzle flash, in one transform DCTL, each built from the light itself:
+//   0 Laser Beam: a straight beam from Start to End, seen by its scatter: a white-hot core (the camera's sensor clips
+//     where the beam is densest), a coloured glow round it, and a wide faint scatter in the haze drifting along it
+//     (Haze). It shimmers along its length and flickers frame to frame (Flicker); a hot spot where it leaves the
+//     emitter and where it strikes, the surface round the strike lit by it. Length under 100 makes it a bolt that
+//     travels Start to End Rate times a second.
+//   1 Zap To: an arc from Start to End, its path bent by layered noise pinned at both ends, forking (Branches), a new
+//     path Rate times a second; each strike's leader reaches part way on its first frame and lands on the next, the
+//     contact points glow white, and the arc lights the scene round it.
+//   2 Zap From: Count arcs thrown out from Start, as from a charged electrode, over Spread degrees about Angle and out
+//     to Size, each thinning and dying toward its tip, a new set Rate times a second.
+//   3 Muzzle Flash: at Start, pointing along Angle: a short star of hot gas, a forward flame and Points side petals
+//     round a white core, ragged at the edges, a few burning grains flung forward. It fires every Interval frames by
+//     TIMELINE_FRAME_INDEX and lives Life frames, white-yellow on the first, larger, cooler and fainter after; its
+//     light falls on the scene round it. Interval 0 holds the first frame.
+// Light is added in linear, the scene relit by multiplying, so black stays black away from the light. Amount 0 is the
+// input exactly. An OpenFX DCTL effect or a DCTL plugin node. MIT License.
+
+DEFINE_UI_PARAMS(lzAmount, Laser,       DCTLUI_SLIDER_FLOAT, 100.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lzMode,   Mode,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 3.0, 1.0)
+DEFINE_UI_PARAMS(lzX0,     Start X,     DCTLUI_SLIDER_FLOAT, 12.0, -20.0, 120.0, 1.0)
+DEFINE_UI_PARAMS(lzY0,     Start Y,     DCTLUI_SLIDER_FLOAT, 70.0, -20.0, 120.0, 1.0)
+DEFINE_UI_PARAMS(lzX1,     End X,       DCTLUI_SLIDER_FLOAT, 86.0, -20.0, 120.0, 1.0)
+DEFINE_UI_PARAMS(lzY1,     End Y,       DCTLUI_SLIDER_FLOAT, 34.0, -20.0, 120.0, 1.0)
+DEFINE_UI_PARAMS(lzWidth,  Width,       DCTLUI_SLIDER_FLOAT, 30.0, 1.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lzGlow,   Glow,        DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lzHaze,   Haze,        DCTLUI_SLIDER_FLOAT, 40.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lzHue,    Hue,         DCTLUI_SLIDER_FLOAT, 130.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(lzFlick,  Flicker,     DCTLUI_SLIDER_FLOAT, 30.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lzLength, Length,      DCTLUI_SLIDER_FLOAT, 100.0, 5.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lzRate,   Rate,        DCTLUI_SLIDER_FLOAT, 6.0, 0.0, 24.0, 1.0)
+DEFINE_UI_PARAMS(lzChaos,  Chaos,       DCTLUI_SLIDER_FLOAT, 45.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lzBranch, Branches,    DCTLUI_SLIDER_FLOAT, 2.0, 0.0, 4.0, 1.0)
+DEFINE_UI_PARAMS(lzCount,  Count,       DCTLUI_SLIDER_FLOAT, 5.0, 1.0, 8.0, 1.0)
+DEFINE_UI_PARAMS(lzAngle,  Angle,       DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(lzSpread, Spread,      DCTLUI_SLIDER_FLOAT, 360.0, 0.0, 360.0, 1.0)
+DEFINE_UI_PARAMS(lzSize,   Size,        DCTLUI_SLIDER_FLOAT, 50.0, 0.0, 100.0, 1.0)
+DEFINE_UI_PARAMS(lzEvery,  Interval,    DCTLUI_SLIDER_FLOAT, 4.0, 0.0, 48.0, 1.0)
+DEFINE_UI_PARAMS(lzLife,   Life,        DCTLUI_SLIDER_FLOAT, 3.0, 1.0, 4.0, 1.0)
+DEFINE_UI_PARAMS(lzPoints, Points,      DCTLUI_SLIDER_FLOAT, 4.0, 0.0, 6.0, 1.0)
+DEFINE_UI_PARAMS(lzSeed,   Seed,        DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 100.0, 1.0)
+
+DEFINE_UI_TOOLTIP(Mode, "0 Laser Beam, 1 Zap To, 2 Zap From, 3 Muzzle Flash")
+DEFINE_UI_TOOLTIP(Start X, "Percent of the frame's width; Y is percent of its height. The muzzle in Muzzle Flash")
+DEFINE_UI_TOOLTIP(Length, "Laser Beam: 100 a steady beam, under it a bolt of that share travelling Rate times a second")
+DEFINE_UI_TOOLTIP(Rate, "Bolts or strikes a second; 0 holds one still")
+DEFINE_UI_TOOLTIP(Angle, "Muzzle Flash: where it points; Zap From: the middle of its spread. 0 right, 90 down")
+DEFINE_UI_TOOLTIP(Size, "Muzzle Flash: the flame's size; Zap From: the arcs' reach; Laser and Zap To: the end glows")
+DEFINE_UI_TOOLTIP(Interval, "Muzzle Flash: frames from one shot to the next; 0 holds the first frame")
+DEFINE_UI_TOOLTIP(Life, "Muzzle Flash: frames each shot lasts")
+DEFINE_UI_TOOLTIP(Points, "Muzzle Flash: the side petals of the star")
+
+#include "../light/light.h"
+
+__DEVICE__ float3 hueL(float h)
+{
+    float k = _fmod(h / 60.0f + 600.0f, 6.0f);
+    return make_float3(toLin(_saturatef(_fabs(k - 3.0f) - 1.0f)), toLin(_saturatef(2.0f - _fabs(k - 2.0f))), toLin(_saturatef(2.0f - _fabs(k - 4.0f))));
+}
+
+__DEVICE__ float2 segPart(float x, float y, float ax, float ay, float bx, float by, float t0, float t1)
+{
+    float dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy + 1e-10f;
+    float t = _fminf(_fmaxf(((x - ax) * dx + (y - ay) * dy) / L2, t0), t1);
+    float ex = x - (ax + dx * t), ey = y - (ay + dy * t);
+    return make_float2(_sqrtf(ex * ex + ey * ey), t);
+}
+
+__DEVICE__ float2 arcDist(float x, float y, float ax, float ay, float bx, float by, float chaos, float z, uint s, float tlo, float thi, float far)
+{
+    float dx = bx - ax, dy = by - ay, L = _sqrtf(dx * dx + dy * dy) + 1e-5f;
+    float ux = dx / L, uy = dy / L;
+    float t = ((x - ax) * ux + (y - ay) * uy) / L;
+    float perp = (x - ax) * -uy + (y - ay) * ux;
+    float amp0 = 0.16f * chaos * L;
+    float tc = _fminf(_fmaxf(t, tlo), thi);
+    float over = (t - tc) * L;
+    if (_fabs(perp) > 2.0f * amp0 + far || _fabs(over) > far) return make_float2(1e3f, tc);
+    float pin = _sinf(3.1415927f * _saturatef(tc));
+    float off = 0.0f, amp = amp0, f = 3.0f;
+    for (int o = 0; o < 5; o++) {
+        off += amp * (vnoise3(tc * f + 37.0f * (float)(o) + 1000.0f, z + 1000.0f, 0.0f, s + (uint)(o)) - 0.5f);
+        amp *= 0.5f; f *= 2.3f;
+    }
+    float q = perp - off * pin;
+    return make_float2(_sqrtf(q * q + over * over), tc);
+}
+
+__DEVICE__ float petal(float u, float v, float a, float len, float wid)
+{
+    float ca = _cosf(a), sa = _sinf(a);
+    float pa = u * ca + v * sa, pb = -u * sa + v * ca;
+    if (pa <= 0.0f || pa >= len) return 0.0f;
+    float hw = wid * len * _powf(_sinf(3.1415927f * pa / len), 0.7f) * (1.0f - 0.35f * pa / len) + 1e-4f;
+    float e = _saturatef(1.0f - _fabs(pb) / hw);
+    return e * e * (1.5f - 0.5f * e);
+}
+
+__DEVICE__ float3 fireCol(float T)
+{
+    float r = 1.0f, g = lerp1(0.22f, 0.55f, sstep(0.0f, 0.5f, T)), b = lerp1(0.03f, 0.14f, sstep(0.2f, 0.6f, T));
+    float y = sstep(0.5f, 0.85f, T);
+    g = lerp1(g, 0.85f, y); b = lerp1(b, 0.45f, y);
+    float w = sstep(0.8f, 1.0f, T);
+    return make_float3(r, lerp1(g, 0.96f, w), lerp1(b, 0.86f, w));
+}
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    float3 c0 = make_float3(_tex2D(p_TexR, p_X, p_Y), _tex2D(p_TexG, p_X, p_Y), _tex2D(p_TexB, p_X, p_Y));
+    if (lzAmount <= 0.0f) return c0;
+    int m = (int)(lzMode + 0.5f);
+    float hh = (float)(p_Height), aspect = (float)(p_Width) / hh;
+    float x = ((float)(p_X) + 0.5f) / hh, y = ((float)(p_Y) + 0.5f) / hh;
+    float ax = lzX0 / 100.0f * aspect, ay = lzY0 / 100.0f, bx = lzX1 / 100.0f * aspect, by = lzY1 / 100.0f;
+    float r = toLin(_saturatef(c0.x)), g = toLin(_saturatef(c0.y)), b = toLin(_saturatef(c0.z));
+    int fr = TIMELINE_FRAME_INDEX;
+    float t = (float)(fr) / 24.0f;
+    uint sd = (uint)(lzSeed) * 613u + 7u;
+    float k = lzAmount / 100.0f;
+    float3 hc = hueL(lzHue);
+    float w = 0.0005f + 0.0035f * lzWidth / 100.0f;
+    float fl = 1.0f - 0.4f * lzFlick / 100.0f * hash01((uint)(fr) + 9u, sd, 2u);
+    float esz = 0.4f + lzSize / 50.0f;
+    float ar = 0.0f, ag = 0.0f, ab = 0.0f, mr = 1.0f, mg = 1.0f, mb = 1.0f;
+    if (m == 0) {
+        float t0 = 0.0f, t1 = 1.0f, tail = 1.0f;
+        int bolt = lzLength < 100.0f && lzRate > 0.0f ? 1 : 0;
+        if (bolt == 1) {
+            float ln = lzLength / 100.0f, ph = t * lzRate - _floorf(t * lzRate);
+            float head = ph * (1.0f + ln);
+            t0 = _fmaxf(head - ln, 0.0f); t1 = _fminf(head, 1.0f);
+        }
+        float2 sp = segPart(x, y, ax, ay, bx, by, t0, t1);
+        float d = sp.x;
+        float dx = bx - ax, dy = by - ay, L = _sqrtf(dx * dx + dy * dy) + 1e-5f;
+        float along = ((x - ax) * dx + (y - ay) * dy) / L, perp = ((x - ax) * -dy + (y - ay) * dx) / L;
+        if (bolt == 1) tail = 0.25f + 0.75f * sstep(t0, t1 + 1e-4f, sp.y) * sstep(-0.001f, 0.002f, t1 - t0);
+        float sh = 1.0f + 0.35f * lzFlick / 100.0f * (vnoise3(along * 40.0f + 1000.0f, t * 9.0f + 1000.0f, 0.0f, sd + 3u) - 0.5f);
+        float ww = w * sh;
+        float core = _expf(-(d / ww) * (d / ww));
+        float mid = _expf(-(d / (ww * 3.0f)) * (d / (ww * 3.0f)));
+        float glow = _expf(-d / (w * (3.0f + 10.0f * lzGlow / 100.0f)));
+        float hz = lzHaze / 100.0f;
+        float smoke = fbm(along * 4.0f - t * 0.6f, perp * 40.0f, t * 0.35f, 3, sd + 11u);
+        float vis = lerp1(1.0f, 0.35f + 1.3f * sstep(0.3f, 0.75f, smoke), hz);
+        float sc = hz * 0.35f * _expf(-d / (w * 5.0f)) * vis;
+        float kk = k * fl * tail * lerp1(1.0f, vis, 0.6f);
+        float cw = 2.4f * core, gw2 = 0.8f * mid + 0.22f * glow + sc;
+        ar += kk * (cw * lerp1(1.0f, hc.x, 0.25f) + gw2 * hc.x);
+        ag += kk * (cw * lerp1(1.0f, hc.y, 0.25f) + gw2 * hc.y);
+        ab += kk * (cw * lerp1(1.0f, hc.z, 0.25f) + gw2 * hc.z);
+        float dA = _sqrtf((x - ax) * (x - ax) + (y - ay) * (y - ay)), dB = _sqrtf((x - bx) * (x - bx) + (y - by) * (y - by));
+        float onA = bolt == 1 ? sstep(0.0f, 0.02f, 0.06f - t0) : 1.0f, onB = bolt == 1 ? sstep(0.95f, 1.0f, t1) : 1.0f;
+        float eA = onA * (1.2f * _expf(-dA / (w * 3.0f * esz)) + 0.30f * _expf(-dA / (w * 12.0f * esz)));
+        float eB = onB * (1.6f * _expf(-dB / (w * 4.0f * esz)) + 0.45f * _expf(-dB / (w * 18.0f * esz)));
+        ar += k * fl * (eA + eB) * lerp1(1.0f, hc.x, 0.5f); ag += k * fl * (eA + eB) * lerp1(1.0f, hc.y, 0.5f); ab += k * fl * (eA + eB) * lerp1(1.0f, hc.z, 0.5f);
+        float lit = 1.6f * k * fl * onB * _expf(-(dB / (0.04f * esz)) * (dB / (0.04f * esz)));
+        mr += lit * hc.x; mg += lit * hc.y; mb += lit * hc.z;
+    } else if (m <= 2) {
+        float strike = lzRate > 0.0f ? _floorf(t * lzRate) : 0.0f;
+        float since = lzRate > 0.0f ? t * lzRate - strike : 0.0f;
+        float flick = lzRate > 0.0f ? (0.55f + 0.45f * _expf(-4.0f * since)) * fl : fl;
+        float chaos = lzChaos / 100.0f;
+        float far = w * (6.0f + 16.0f * lzGlow / 100.0f) * 9.0f;
+        float d = 1e3f, dt = 1e3f;
+        int nb = (int)(lzBranch + 0.5f);
+        uint zs = (uint)(strike) + sd;
+        if (m == 1) {
+            float fs = lzRate > 0.0f ? since * 24.0f / lzRate : 9.0f;
+            float reach = _saturatef(0.45f + 0.55f * fs);
+            float2 a0 = arcDist(x, y, ax, ay, bx, by, chaos, strike * 3.1f, 11u + sd, 0.0f, reach, far);
+            d = a0.x; dt = d;
+            for (int j = 0; j < 4; j++) {
+                if (j >= nb) break;
+                float tb = 0.2f + 0.55f * hash01(zs + 100u, (uint)(j), 3u);
+                if (tb > reach) continue;
+                float an = (hash01(zs + 100u, (uint)(j), 4u) - 0.5f) * 1.6f;
+                float px = ax + (bx - ax) * tb, py = ay + (by - ay) * tb;
+                float dxm = bx - ax, dym = by - ay, ca = _cosf(an), sa = _sinf(an);
+                float ex = px + 0.4f * (dxm * ca - dym * sa) * (1.0f - tb), ey = py + 0.4f * (dxm * sa + dym * ca) * (1.0f - tb);
+                float2 ab2 = arcDist(x, y, px, py, ex, ey, chaos * 1.2f, strike * 3.1f + (float)(j) * 7.0f, 40u + (uint)(j) * 5u + sd, 0.0f, 1.0f, far);
+                d = _fminf(d, ab2.x * (1.5f + 1.5f * ab2.y));
+            }
+            float dA = _sqrtf((x - ax) * (x - ax) + (y - ay) * (y - ay)), dB = _sqrtf((x - bx) * (x - bx) + (y - by) * (y - by));
+            float e = (1.4f * _expf(-dA / (w * 4.0f * esz)) + sstep(0.9f, 1.0f, reach) * 1.8f * _expf(-dB / (w * 5.0f * esz))) * flick * k;
+            ar += e; ag += e; ab += e;
+        } else {
+            float R = 0.08f + 0.0062f * lzSize;
+            int nc = (int)(lzCount + 0.5f);
+            for (int j = 0; j < 8; j++) {
+                if (j >= nc) break;
+                float an = (lzAngle + (hash01(zs + 300u, (uint)(j), 5u) - 0.5f) * lzSpread) * 0.0174533f;
+                float ln = R * (0.45f + 0.55f * hash01(zs + 300u, (uint)(j), 6u));
+                float ex = ax + ln * _cosf(an), ey = ay + ln * _sinf(an);
+                float2 a1 = arcDist(x, y, ax, ay, ex, ey, chaos * 1.15f, strike * 3.1f + (float)(j) * 5.3f, 60u + (uint)(j) * 3u + sd, 0.0f, 1.0f, far);
+                d = _fminf(d, a1.x * (1.0f + 1.5f * a1.y) + 1.3f * w * a1.y * a1.y);
+                dt = _fminf(dt, a1.x);
+                if (nb > 0) {
+                    float tb = 0.3f + 0.4f * hash01(zs + 300u, (uint)(j), 7u);
+                    float bn = an + (hash01(zs + 300u, (uint)(j), 8u) - 0.5f) * 1.4f;
+                    float px = ax + (ex - ax) * tb, py = ay + (ey - ay) * tb;
+                    float qx = px + 0.5f * ln * (1.0f - tb) * _cosf(bn), qy = py + 0.5f * ln * (1.0f - tb) * _sinf(bn);
+                    float2 a2 = arcDist(x, y, px, py, qx, qy, chaos * 1.3f, strike * 3.1f + (float)(j) * 9.1f, 90u + (uint)(j) * 3u + sd, 0.0f, 1.0f, far);
+                    d = _fminf(d, a2.x * (1.6f + 1.5f * a2.y) + w * (0.5f + 1.3f * a2.y * a2.y));
+                }
+            }
+            float dA = _sqrtf((x - ax) * (x - ax) + (y - ay) * (y - ay));
+            float e = 2.0f * _expf(-dA / (w * 5.0f * esz)) * flick * k;
+            ar += e; ag += e; ab += e;
+            float eg = 0.15f * _expf(-dA / (0.018f * esz)) * flick * k;
+            ar += eg * hc.x; ag += eg * hc.y; ab += eg * hc.z;
+        }
+        float core = _expf(-(d / w) * (d / w));
+        float glow = _expf(-d / (w * (4.0f + 14.0f * lzGlow / 100.0f)));
+        float kk = k * flick;
+        ar += kk * (2.5f * core + 0.45f * glow * hc.x); ag += kk * (2.5f * core + 0.45f * glow * hc.y); ab += kk * (2.5f * core + 0.45f * glow * hc.z);
+        float lit = 0.4f * kk * _expf(-dt / 0.06f);
+        mr += lit * hc.x; mg += lit * hc.y; mb += lit * hc.z;
+    } else {
+        int per = (int)(lzEvery + 0.5f), life = (int)(lzLife + 0.5f);
+        int shot = 0, age = 0;
+        if (per > 0) { shot = fr / per; age = fr - shot * per; }
+        if (age < life) {
+            float S = 0.03f + 0.0012f * lzSize;
+            uint ss = (uint)(shot) * 7919u + sd;
+            float fa = (float)(age);
+            float I = _powf(0.34f, fa);
+            float grow = 1.0f + 0.25f * fa;
+            float an = (lzAngle + 8.0f * (hash01(ss, 1u, 2u) - 0.5f)) * 0.0174533f;
+            float ca = _cosf(an), sa = _sinf(an);
+            float px = x - ax, py = y - ay;
+            float u0 = (px * ca + py * sa) / S, v0 = (-px * sa + py * ca) / S;
+            float rr = _sqrtf(u0 * u0 + v0 * v0);
+            float nz = 5.0f / grow;
+            float u = (u0 + 0.12f * (vnoise3(u0 * nz + 1000.0f, v0 * nz + 1000.0f, fa * 0.9f, ss + 3u) - 0.5f)) / grow;
+            float v = (v0 + 0.12f * (vnoise3(u0 * nz + 1200.0f, v0 * nz + 1000.0f, fa * 0.9f, ss + 4u) - 0.5f)) / grow;
+            float lf = 1.0f + 0.6f * hash01(ss, 3u, 4u);
+            float D = petal(u, v, 0.0f, lf, 0.24f) * (0.45f + 0.55f * _powf(_saturatef(1.0f - u / lf), 0.6f));
+            int np = (int)(lzPoints + 0.5f);
+            for (int j = 0; j < 6; j++) {
+                if (j >= np) break;
+                float pa = (-1.0f + 2.0f * ((float)(j) + 0.5f) / (float)(np)) * 1.75f + 0.25f * (hash01(ss, (uint)(j), 5u) - 0.5f);
+                if (np == 1) pa = 1.57f * (hash01(ss, 9u, 5u) < 0.5f ? -1.0f : 1.0f);
+                float pl = (0.28f + 0.35f * hash01(ss, (uint)(j), 6u)) * (1.0f - 0.35f * _fabs(pa) / 1.75f);
+                D = _fmaxf(D, 0.80f * petal(u, v, pa, pl, 0.27f));
+            }
+            D *= 0.6f + 0.7f * fbm(u * 3.5f, v * 3.5f, fa * 0.8f + (float)(shot % 97) * 3.0f, 3, ss + 8u);
+            float rc = _sqrtf(u * u + v * v);
+            D = _fmaxf(D, _expf(-(rc / 0.15f) * (rc / 0.15f)));
+            float T = _saturatef(1.1f * _sqrtf(D) * (1.0f - 0.30f * fa));
+            float3 fc = fireCol(T);
+            float E = I * (1.1f * D + 1.6f * T * T * T * D);
+            float gl = 0.0f;
+            for (int j = 0; j < 6; j++) {
+                float gd = (1.1f + 1.6f * hash01(ss, (uint)(j), 21u)) * lf * grow;
+                float ga = 0.45f * (hash01(ss, (uint)(j), 22u) - 0.5f);
+                float gx = gd * _cosf(ga), gy = gd * _sinf(ga);
+                float2 gs = segPart(u0, v0, gx - 0.12f * _cosf(ga), gy - 0.12f * _sinf(ga), gx, gy, 0.0f, 1.0f);
+                float gw = 1.3f / hh / S;
+                gl += _expf(-(gs.x / gw) * (gs.x / gw)) * (0.4f + 0.6f * hash01(ss, (uint)(j), 23u));
+            }
+            gl *= I * (age < 2 ? 1.0f : 0.0f) * 1.4f;
+            float halo = 0.07f * I * _expf(-rr / (0.7f * grow));
+            ar += k * (E * fc.x + gl + halo); ag += k * (E * fc.y + gl * 0.75f + halo * 0.55f); ab += k * (E * fc.z + gl * 0.4f + halo * 0.18f);
+            float lit = k * I * (1.4f / (1.0f + rr * rr * 0.35f) * _expf(-rr / 6.0f) + 0.04f);
+            mr += lit; mg += lit * 0.72f; mb += lit * 0.42f;
+        }
+    }
+    float rr2 = r * mr + ar, gg2 = g * mg + ag, bb2 = b * mb + ab;
+    float kw = _saturatef(ar + ag + ab + 0.5f * (mr + mg + mb - 3.0f));
+    if (kw <= 0.0f) return c0;
+    return lightOut(rr2, gg2, bb2, kw);
+}
