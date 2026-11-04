@@ -30,7 +30,7 @@ else in one line at the end. The table says what to run when a job includes that
 | The job includes a grade | `craft/color.md`, then `looks/README.md` and `develop_apply.py`. Skip it on a flat-colour brand film |
 | Any sound work | `craft/sound.md`. For a film with no recorded sound of its own, `animation/sound-pass/SKILL.md` |
 | Any words on screen, and captions on all 9:16 work | `craft/text.md` |
-| Any designed screen, graphic, or interface in the film | The design rules in `craft/motion.md`, before you show it |
+| Any designed frame, title card, chart, interface or web page, before you show it | `.claude/skills/unslop/SKILL.md`, and `craft/motion.md` |
 | Every render, before you call it finished | `craft/review.md` and `animation/motion-qa/motion_qa.py` |
 
 **`sound_pass.py` replaces a film's audio.** Its mix holds only the music and effects, so a voice, vows or room sound would be lost. Never run it on a film
@@ -47,6 +47,7 @@ steps ran. Reusing an earlier result is fine: say that you reused it.
 - **Who builds:** you are Claude Code. Where a skill says to paste a prompt into Claude Code, do the build yourself.
 - **Length and shape:** the user's request and the type file set these. A skill's table is a starting point to re-time.
 - **Sound:** recorded sounds are the default, and code-made sounds are allowed where `craft/sound.md` says so.
+- **`unslop` in a film:** run its audit, direction and passes on the film's frames. Its layout and motion passes are written for apps and pages, so in a film `craft/motion.md` decides how things move. Put its audit and direction in your plan, with no separate stop unless the user wants one. Ask before an image tool that may cost money. Its story video and `snapshot.mjs` need Playwright, so make the video only when the user asks.
 
 **Skip one only with a reason you can write down**, in the brief, in one line. The user can always tell you to skip something.
 

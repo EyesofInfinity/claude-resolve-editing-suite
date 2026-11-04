@@ -21,6 +21,7 @@ keep their own licences. This file lists what it builds on.
 | animate (cth9191), in `animation/animate/` | Short animated pieces drawn in code in seven looks, their scores and review tools; our changes are listed in its `README.md` | MIT (its notice is `animation/animate/LICENSE`) |
 | Motion Graphics Skill Pack (Charlie Hills), in `builder/skills/` | Brand intake, the brief writer and eight format workflows; what was left out is listed in `builder/README.md` | MIT (its notice is `builder/LICENSE`) |
 | reanimate (Niaz Morshed), in `animation/reanimate/` | Copying a motion from a website, video or GIF and measuring the copy against it; our changes are listed in its `CHANGES.md` | MIT (its notice is `animation/reanimate/LICENSE`) |
+| unslop (Damir Sokolovsky, @heydamir, heydamir.design/unslop), upstream heydamir/unslop commit 4652254, in `.claude/skills/unslop/` | The design pass: audit, direction and nine passes that turn AI-looking screens into designed ones. Copied unchanged; the suite's `make-video` skill says how it applies to a film | CC BY 4.0 (`.claude/skills/unslop/LICENSE`) |
 
 VST is a registered trademark of Steinberg Media Technologies GmbH.
 

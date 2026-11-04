@@ -67,7 +67,7 @@ Write one rule for each class of object. If everything overshoots, nothing feels
 - One idea in a frame. Phone first: anything that matters is large.
 - Avoid the banned defaults: centred title on a gradient, everything fading in, corner labels, glows on interface parts, particle bursts, a logo fading out as the only ending.
 - `animation/motion-qa/motion_qa.py` warns on mostly blue-purple films. A warning asks for a reason, and it is allowed when the brand asks for it.
-- Find the direction from the product itself. A precision tool, a children's app and a law firm should not share a look, and none of them should look like a default.
+- Find the direction from the product itself. A precision tool, a children's app and a law firm should not share a look, and none of them should look like a default. `.claude/skills/unslop/SKILL.md` is the method: audit, direction, then nine passes. Run it on designed frames before you show them.
 
 ## Which tool
 

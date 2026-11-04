@@ -61,4 +61,4 @@
 - A logo fading out as the only ending.
 - Stock clips that never share light or colour.
 
-These appear when decisions were left open, so the model filled them with its safest guess. The brief closes those decisions.
+These appear when decisions were left open, so the model filled them with its safest guess. The brief closes those decisions, and `.claude/skills/unslop/SKILL.md` finds and fixes what remains on a designed frame.

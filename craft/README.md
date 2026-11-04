@@ -110,5 +110,6 @@ Rewritten from public sources and working practice. Credit where a method has a 
 - O'Keefe and Hoeken 2021 on what persuasion research can and cannot promise.
 - Eugene Schwartz, *Breakthrough Advertising*, for the awareness stages.
 - Thomas and Johnston, *The Illusion of Life*, for the principles of animation. LottieFiles' motion design skill for their use in code.
+- Damir Sokolovsky, unslop, for the design pass in `.claude/skills/unslop`. CC BY 4.0.
 - The motion-design writing shared in 2026 by working Claude Code users, for the brief, gate and contact-sheet habits in
   [motion.md](motion.md) and [review.md](review.md). The sound pass in `animation/sound-pass` carries its own credits.

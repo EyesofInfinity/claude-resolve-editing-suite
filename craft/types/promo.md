@@ -42,7 +42,7 @@ Make different hooks and shapes from the same data: three openings, 16:9 and 9:1
 
 ## Suite route
 
-`builder/skills/brand-intake/SKILL.md`, then `builder/skills/motion-brief-writer/SKILL.md`, then a format. `builder/skills/launch-video/SKILL.md` is shaped for software and product screens: keep its beats and replace its interface shots for anything else, or use `animation/animate/SKILL.md` for a drawn film of a physical product. Re-time its 45 second table to the request. Sound with `animation/sound-pass/SKILL.md`. Copy a motion you admire with `animation/reanimate/SKILL.md`, leaving its logo and copy behind.
+`builder/skills/brand-intake/SKILL.md`, then `builder/skills/motion-brief-writer/SKILL.md`, then a format. `builder/skills/launch-video/SKILL.md` is shaped for software and product screens: keep its beats and replace its interface shots for anything else, or use `animation/animate/SKILL.md` for a drawn film of a physical product. Re-time its 45 second table to the request. Run `.claude/skills/unslop/SKILL.md` on the designed frames before you show them. Sound with `animation/sound-pass/SKILL.md`. Copy a motion you admire with `animation/reanimate/SKILL.md`, leaving its logo and copy behind.
 
 ## Common failures
 

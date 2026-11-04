@@ -32,6 +32,7 @@ it, run the tool without `-I`.
 | An effect, transition or audio plugin explained | the effect list | `EFFECTS.md` |
 | A check of a finished render | motion-qa | `python -I animation/motion-qa/motion_qa.py <video>` |
 | Advice on making a video better: pacing, structure, framing, grade, sound | the craft rules | `craft/README.md` |
+| A screen, graphic, chart or web page that looks AI-made or cheap | unslop | `.claude/skills/unslop/SKILL.md` |
 
 ## Rules
 

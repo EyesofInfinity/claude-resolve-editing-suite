@@ -37,7 +37,8 @@ model releases for the medium term.
   text. Claude reads them and runs the right tools on its own, so you can ask in plain words and do not need to be an editor. See
   [craft/README.md](craft/README.md).
 - **Cutting.** Silences, stutters, false starts and retakes found from the transcript. The cut lands on a new Resolve timeline.
-- **Animation.** Promos, explainers, charts, titles and illustrated stories, made in code at 60 fps with motion blur.
+- **Animation.** Promos, explainers, charts, titles and illustrated stories, made in code at 60 fps with motion blur. A design pass,
+  [unslop](.claude/skills/unslop/SKILL.md) by Damir Sokolovsky, removes the AI look from designed frames and web pages.
 - **Grading.** A photo-style grade and film looks, judged shot by shot, with a way back.
 - **Effects.** 65 effects, transitions and grade nodes, 43 Fusion tools and 6 audio plugins, all inside Resolve. See [EFFECTS.md](EFFECTS.md).
 - **Sound.** Sound effects, a mastered mix, and a library of free recorded sounds.
