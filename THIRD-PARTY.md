@@ -33,7 +33,7 @@ VST is a registered trademark of Steinberg Media Technologies GmbH.
 | Python packages: numpy, scipy, Pillow, opencv-python, soundfile, librosa, numba, PyAV | The shot tools (Beat, Grain Match, Depth, Light Comp, Particles camera match, Time FX, Datamosh) | BSD, MIT, Apache-2.0 or ISC, each as its project states |
 | PyTorch and Hugging Face transformers | Running the depth model | BSD-3-Clause and Apache-2.0 |
 | FFmpeg | Reading and writing video in the shot tools | LGPL or GPL, as your FFmpeg build states |
-| faster-whisper and the Whisper medium.en model | `edit/transcribe.py`, the word transcript for the cut tools; the model (about 1.5 GB) downloads on first use | MIT |
+| faster-whisper and the Whisper medium.en model | `edit/transcribe.py`, the word transcript for the cut tools; setup downloads the model (about 1.5 GB) | MIT |
 | Python packages for the sound pass: librosa, soundfile, numpy, scipy, matplotlib | `animation/sound-pass/scripts/sound_pass.py` | ISC, BSD and PSF-based, each as its project states |
 | Playwright and its Chromium for motion-broll | `animation/motion-broll/scripts/setup.sh` installs them into your project's `motion/` folder | Apache-2.0 |
 | The Mixkit typing sound in the sound pass's default kit | Downloaded at run time into your output folder, never bundled | Mixkit Sound Effects Free License (no redistribution) |

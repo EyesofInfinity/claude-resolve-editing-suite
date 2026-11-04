@@ -151,7 +151,7 @@ Resolve Studio makes captions itself. Use it first. Rules for groups, size and t
 5. Render with `SetRenderSettings({"ExportSubtitle": True, "SubtitleFormat": "BurnIn", ...})`. Use `"SeparateFile"` for a caption file on long YouTube videos. Delete only your own render job afterwards.
 6. Look at frames at phone size.
 
-**Without Resolve Studio,** which is the edition that generates captions: run `edit/transcribe.py` for word timings. It downloads about 1.5 GB on first run, and `medium.en` is English only. Write a job script that groups the words into an ASS file, check that FFmpeg has the `subtitles` filter (`ffmpeg -filters`), burn a still first, then the whole clip, to a new file. Phone clips in HDR can wash out when re-encoded: read the colour transfer first.
+**Without Resolve Studio,** which is the edition that generates captions: run `edit/transcribe.py` for word timings. `medium.en` is English only. Write a job script that groups the words into an ASS file, check that FFmpeg has the `subtitles` filter (`ffmpeg -filters`), burn a still first, then the whole clip, to a new file. Phone clips in HDR can wash out when re-encoded: read the colour transfer first.
 
 ## 7. Review
 

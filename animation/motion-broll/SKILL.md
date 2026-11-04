@@ -18,7 +18,7 @@ Everything you need is in this skill folder:
 
 Below, `$SKILL` means this skill's folder. Work in a `motion/` folder in the user's project.
 
-## 1. Set up (first run only)
+## 1. Set up the job's folder
 
 ```bash
 bash "$SKILL/scripts/setup.sh" ./motion

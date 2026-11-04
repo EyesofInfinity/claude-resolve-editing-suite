@@ -20,8 +20,8 @@ To use this to its full potential, you need all three:
 - **[Claude Code](https://claude.com/claude-code)** runs the whole system.
 - **[DaVinci Resolve Studio](https://www.blackmagicdesign.com/products/davinciresolve)**, the paid edition, holds the edit. The
   free edition lacks scripting and DCTL, so the grade and the effects do not run in it.
-- **[HyperFrames](https://github.com/heygen-com/hyperframes)** renders the animated videos. It is free and open source, and it
-  downloads on first use.
+- **[HyperFrames](https://github.com/heygen-com/hyperframes)** renders the animated videos. It is free and open source, and setup
+  installs it.
 
 Claude sets up the rest in one go, all of it: Python, Node, FFmpeg, every package and model, several GB in all. This works on Windows only.
 

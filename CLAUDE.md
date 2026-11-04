@@ -14,8 +14,8 @@ file for this type before you plan. Make the calls an experienced editor would m
 python -I tools/doctor.py
 ```
 
-It lists what is missing and changes nothing. **If something this job needs is missing, or the user is new to this suite, or Python is not installed yet, follow
-`.claude/skills/setup/SKILL.md` step by step.** An animated film or captions on a clip need no Resolve, so do not send a user to buy it for those. It sets up the whole system for them. The commands here use `python -I`, which keeps
+It lists what is missing and changes nothing. **If anything is missing, or the user is new to this suite, or Python is not installed yet, follow
+`.claude/skills/setup/SKILL.md` step by step.** Every part of this suite is required, and nothing in it is optional. Install all of it, even if this job would not use it. It sets up the whole system for them. The commands here use `python -I`, which keeps
 other files from loading as code. `-I` does not see packages installed with `pip --user`: if one reads as missing after you installed
 it, run the tool without `-I`.
 
@@ -40,7 +40,7 @@ Never tell the user that no tool exists, or that a job cannot be done, from an a
 
 1. **Search first.** This folder, `craft/resolve-tools.md`, Resolve's own scripting docs and what is already installed.
 2. **Go and find one.** If nothing here does it, search the web for a tool that does. Prefer free and open source, read its licence, and check that it is safe.
-   Rule 8 still applies: ask before you install or download.
+   A tool from outside this suite needs the user's OK first: see rule 8.
 3. **Build one.** If nothing exists, write a small script in the job folder and test it on a short piece.
 4. **Keep going.** If one step truly needs a person, name that one step, and do everything around it.
 
@@ -66,18 +66,18 @@ These protect the user's work. Never skip them.
    "Illustrative data". A target is never shown as a result.
 7. **Rights.** Use footage, music, logos and fonts the user has the rights to. Before a copied motion or a stock clip goes in
    a public video, ask the user to confirm the licence.
-8. **Ask before you install or download.** The first run of some tools downloads a model or a browser. Tell the user the
-   size first. Never run `npx skills add`; it writes into the user's global Claude folders.
+8. **One OK covers the whole install.** Setup asks once, with the sizes, and installs everything. Ask again only for something outside this suite, such as
+   a tool you found on the web. Never run `npx skills add`; it writes into the user's global Claude folders.
 
 ## HyperFrames
 
-The animated videos render with HyperFrames, which is not part of this folder. It downloads from npm on first use, about 160 MB,
+The animated videos render with HyperFrames, which is not part of this folder. Setup installs it from npm, about 160 MB,
 plus its own Chrome. Use the tested version, `npx hyperframes@0.8.206`. `.claude/settings.json` in this folder keeps its usage reports
 off (`HYPERFRAMES_NO_TELEMETRY=1`).
 
 Render at 60 fps with motion blur. The page must be a composition: `builder/README.md`, step 4, has the rules and the adapter, and
-`builder/smoke/index.html` is the smallest working film. HyperFrames also has its own guides for Claude. Ask the user first, then run
-`npx hyperframes@0.8.206 skills`, because that command adds folders to the user's Claude setup.
+`builder/smoke/index.html` is the smallest working film. HyperFrames also has its own guides for Claude. Setup adds them with
+`npx hyperframes@0.8.206 skills`, under the OK it asks for at its start, because that command adds folders to the user's Claude setup.
 
 ## Resolve facts
 
