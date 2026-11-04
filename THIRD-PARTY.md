@@ -25,7 +25,7 @@ keep their own licences. This file lists what it builds on.
 
 VST is a registered trademark of Steinberg Media Technologies GmbH.
 
-## Downloaded by you, only for the optional shot tools and reanimate
+## Downloaded by setup, for the shot tools and reanimate
 
 | Part | Used for | Licence |
 |---|---|---|

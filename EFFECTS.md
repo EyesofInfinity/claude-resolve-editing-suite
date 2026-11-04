@@ -112,7 +112,7 @@ Six VST3 plugins. In Fairlight, open a track's effects and look under VST.
 
 Their noise (hiss, crackle, hum) follows the audio: where the track is silent, the plugin is silent.
 
-## Shot tools (optional, need Python)
+## Shot tools
 
 Some effects need to look at a whole shot or a song first, so they run as small tools outside Resolve:
 
@@ -123,4 +123,4 @@ Some effects need to look at a whole shot or a song first, so they run as small 
 - **Depth and Light Comp:** depth effects and generated light placed into the scene by its depth.
 - **Time FX and Datamosh:** effects made of time, rendered as clips for your timeline.
 
-Each tool's folder has a README with its command. They need Python and `requirements-shot-tools.txt`.
+Each tool's folder has a README with its command. Setup installs what they need.

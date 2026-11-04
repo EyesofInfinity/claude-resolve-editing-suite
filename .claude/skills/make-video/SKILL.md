@@ -132,7 +132,7 @@ Use this for weddings, events, documentaries, vlogs, music videos and anything a
 1. **Inventory.** List the folder. Run `ffprobe` on each clip for length, frame rate, size, audio and colour transfer. Note variable-rate phone clips and log footage. Write it to the job folder.
 2. **Read it.** Make a contact sheet per clip, at a rate set from its length (`craft/review.md`), and write one line on each.
 3. **Find the words.** Run `edit/transcribe.py` on clips with speech, one clip at a time. It stops on a clip with no audio track. Use `--model medium` for speech that is not English.
-4. **Find the music.** `effects/beat/beat.py` writes the song's beats and downbeats to a `.music.json`, once the shot tools are installed. You place the cuts: nothing here does it for you.
+4. **Find the music.** `effects/beat/beat.py` writes the song's beats and downbeats to a `.music.json`. You place the cuts: nothing here does it for you.
 5. **Plan.** Write a shot plan in the job folder: clip, in, out, why. Show the user before any long job.
 6. **Build.** `edit/to_resolve.py` lays out one source only. For many clips, use Resolve's `CreateTimelineFromClips` or `AppendToTimeline` on a new timeline. Test it on a few clips first.
 7. **Sync.** Use Resolve's `AutoSyncAudio` for a separate recorder and `CreateMulticamClip` for several cameras.

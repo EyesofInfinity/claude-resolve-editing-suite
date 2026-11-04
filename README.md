@@ -23,7 +23,7 @@ To use this to its full potential, you need all three:
 - **[HyperFrames](https://github.com/heygen-com/hyperframes)** renders the animated videos. It is free and open source, and it
   downloads on first use.
 
-Claude can set up the rest with you: Python, Node and FFmpeg. This works on Windows only.
+Claude sets up the rest in one go, all of it: Python, Node, FFmpeg, every package and model, several GB in all. This works on Windows only.
 
 It may work just as well in Codex. That has not been tested.
 

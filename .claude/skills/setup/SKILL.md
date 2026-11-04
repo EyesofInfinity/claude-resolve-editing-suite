@@ -8,6 +8,9 @@ description: Set up the Claude Resolve Editing Suite on this computer for a new 
 You do this for the user. They do only what a person must do: give one OK, install Resolve Studio if it is missing, click Yes on
 one Windows prompt, and set one preference in Resolve.
 
+**Nothing in this suite is optional. Install all of it, in this one run.** Never call a part "optional" or an "extra", and never offer to add it later. A user who asks for
+a video must never wait on an install.
+
 Work in order. For each step: check first, skip it if it is done, then verify. Tell the user in one short line what you are doing.
 Run every command from this folder.
 
@@ -15,11 +18,11 @@ Run every command from this folder.
 
 Tell the user, in plain words, and wait for a yes:
 
-> I will set up the suite on this computer. I will install what is missing: Python, Node and FFmpeg with Windows' own installer
-> (winget), the Python packages, HyperFrames with its browser (about 160 MB plus Chrome), and the animation tools (about 700 MB). Then I
-> will put the effects and audio plugins into DaVinci Resolve. Windows will ask you once for admin rights, for the plugins. The first
-> talking-head cut also downloads a speech model of about 1.5 GB. I will also add HyperFrames' guides to your Claude folder. Nothing else
-> on your computer changes. Shall I go ahead?
+> I will set up the whole suite on this computer, so nothing is left to install later. I will install what is missing: Python, Node and FFmpeg
+> with Windows' own installer (winget), all the Python packages including PyTorch (a few GB), HyperFrames with its browser (about 160 MB plus
+> Chrome), the animation tools (about 700 MB), a speech model (about 1.5 GB) and a depth model (about 99 MB). Then I will put the effects and
+> audio plugins into DaVinci Resolve. Windows will ask you once for admin rights, for the plugins. I will also add HyperFrames' guides to your
+> Claude folder. This can take a while, and you can do other work while it runs. Nothing else on your computer changes. Shall I go ahead?
 
 If the user says no to a part, skip that part and say what will not work.
 
@@ -54,11 +57,27 @@ computer, send the user to python.org, nodejs.org and gyan.dev/ffmpeg/builds, on
 ## 2. Python packages
 
 ```
-python -m pip install -r requirements.txt
+nvidia-smi
 ```
 
-Install `requirements-shot-tools.txt` too only when the user asks for Beat, Grain Match, Depth, Light Comp, Particles camera match, Time FX
-or Datamosh. It is large.
+If that prints an NVIDIA card, install PyTorch's GPU build first, so the depth and shot tools run on the graphics card:
+
+```
+python -m pip install torch --index-url https://download.pytorch.org/whl/cu128
+```
+
+Then install everything:
+
+```
+python -m pip install -r requirements.txt -r requirements-shot-tools.txt
+```
+
+Then download the models now, so no job stops for them later:
+
+```
+python -c "from faster_whisper import WhisperModel; WhisperModel('medium.en', device='cpu', compute_type='int8')"
+python -c "from huggingface_hub import snapshot_download; snapshot_download('depth-anything/Depth-Anything-V2-Small-hf')"
+```
 
 ## 3. DaVinci Resolve Studio
 
@@ -112,8 +131,8 @@ name has no "Studio", this is the free edition: go back to step 3.
 npx --yes hyperframes@0.8.206 doctor
 ```
 
-It downloads on first use and lists what it found. Only FFmpeg, FFprobe and Chrome matter here. Docker and the voice and music lines are
-optional, so a "Some checks failed" line about them is fine. If it says a newer version exists, keep 0.8.206: that is the tested one. If
+It downloads on first use and lists what it found. Only FFmpeg, FFprobe and Chrome matter here. This suite does not use Docker or HyperFrames' voice and music
+lines, so a "Some checks failed" line about them is fine. If it says a newer version exists, keep 0.8.206: that is the tested one. If
 Chrome is missing, the render in step 8 fetches it.
 
 Then add HyperFrames' guides for Claude, which the animated videos follow. This one command writes into the user's Claude folder, so it needs
@@ -131,7 +150,13 @@ npm install
 npx playwright install chromium
 ```
 
-The B-roll tool and the motion copier set themselves up on first use: their `SKILL.md` files say how.
+Back in this folder, set up the motion copier:
+
+```
+node animation/reanimate/scripts/setup.mjs
+```
+
+The B-roll tool makes its own folder in each job, and its first step there uses this same browser.
 
 ## 8. Prove it
 
@@ -141,6 +166,8 @@ Run these and read the results:
 python -I tools/doctor.py --resolve
 python -I edit/test_snap.py
 ```
+
+The doctor must end with "Ready." with nothing missing. If it lists anything, go back and install it.
 
 Then render the two-second test film. It should show 120 frames at 60 fps, with no failure from the check:
 
@@ -153,7 +180,7 @@ Delete `builder/smoke/smoke.mp4` after.
 
 ## 9. Tell the user
 
-Say what is ready, what was skipped, and what they can ask for now, in plain words. For example:
+Say what is ready and what they can ask for now, in plain words. Mention anything the user told you to skip, and nothing else as left out. For example:
 
 > You are set up. You can ask me to make a 60 second promo, cut a talking-head take, or grade a timeline in Resolve. Tell me what you want to
 > make.

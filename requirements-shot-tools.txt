@@ -1,5 +1,5 @@
-# For the sound pass, the optional shot tools (Beat, Grain Match, Depth, Light Comp, Particles camera match, Time FX, Datamosh) and
-# the audio effect scripts. torch is large, so install this file only when the user asks for one of these.
+# For the sound pass, the shot tools (Beat, Grain Match, Depth, Light Comp, Particles camera match, Time FX, Datamosh) and
+# the audio effect scripts. Setup installs these with everything else.
 # python -m pip install -r requirements-shot-tools.txt
 numpy
 scipy

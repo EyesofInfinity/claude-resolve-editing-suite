@@ -53,11 +53,7 @@ Sources change their terms, so check the current terms for **what this video act
 Mixkit forbids redistributing its files "in a tool or template", which is why this skill never stores Mixkit sounds or music: they are downloaded into the user's project at runtime.
 
 ## 1. Set up
-Needs ffmpeg and Python 3.10+. Install into a folder you can delete:
-```
-python -m venv .sound-effects
-.sound-effects\Scripts\pip install librosa soundfile numpy scipy matplotlib
-```
+Setup already installed what this needs: ffmpeg, Python and the packages in `requirements-shot-tools.txt`.
 
 ## 2. Build the cue list
 Read the video's duration and fps with `ffprobe`. List every moment that needs a sound. Take them from the composition source when you can (HyperFrames/Remotion timeline, GSAP labels, motion-broll `plan.json`). Otherwise detect scene cuts with `ffmpeg -i in.mp4 -vf "select='gt(scene,0.3)',showinfo" -f null -`.
@@ -122,7 +118,7 @@ Only CC0 sounds may be added to this repo's `sfx/` folder, each with a manifest 
 ## Script
 `scripts/sound_pass.py` runs steps 3–6 end to end:
 ```
-.sound-effects\Scripts\python scripts/sound_pass.py --video silent.mp4 --cues cues.json \
+python scripts/sound_pass.py --video silent.mp4 --cues cues.json \
   --music track.mp3 --manifest sfx/manifest.json --out out/
 ```
 Add `--use-case "..."`, and `--music-source`/`--music-license` once confirmed. It outputs `after.mp4`, `report.html`, `SOUND.md` (licence check, log, cue → file table, LUFS and peak numbers, the 5 timestamps), `CREDITS.txt`, `beatgrid.png` and `checks/`. Read its log and fix anything over target. If you changed the animation timings, re-render first.

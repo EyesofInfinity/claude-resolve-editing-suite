@@ -53,10 +53,12 @@ def main():
     line(os.path.isfile(RESOLVE), "DaVinci Resolve", "" if os.path.isfile(RESOLVE) else "install DaVinci Resolve Studio; its scripting and DCTL effects are Studio features")
     installed = os.path.isfile(os.path.join(LUT, "Develop", "Develop 1 Light.dctl"))
     line(installed, "the suite's effects are installed", "" if installed else "double-click Install.bat in this folder")
-    line(os.path.isdir(VST3) or None, "the audio plugins are installed" if os.path.isdir(VST3) else "the audio plugins are not installed; Install.bat offers them")
-    for mod, pkg in (("numpy", "numpy"), ("cv2", "opencv-python"), ("faster_whisper", "faster-whisper")):
+    line(os.path.isdir(VST3), "the audio plugins are installed", "" if os.path.isdir(VST3) else "double-click Install.bat in this folder, and click Yes on the Windows prompt")
+    for mod, pkg in (("numpy", "numpy"), ("cv2", "opencv-python"), ("faster_whisper", "faster-whisper"), ("scipy", "scipy"), ("soundfile", "soundfile"),
+                     ("librosa", "librosa"), ("numba", "numba"), ("av", "av"), ("PIL", "Pillow"), ("matplotlib", "matplotlib"), ("pyloudnorm", "pyloudnorm"),
+                     ("torch", "torch"), ("transformers", "transformers")):
         found = importlib.util.find_spec(mod) is not None
-        fix = "python -m pip install -r requirements.txt"
+        fix = "python -m pip install -r requirements.txt -r requirements-shot-tools.txt"
         if not found and user_site_has(mod):
             fix = "it is installed for this user only, which python -I does not read: run the tools without -I"
         line(found, f"Python package {pkg}", "" if found else fix)
@@ -70,9 +72,10 @@ def main():
     m = re.match(r"ffmpeg version n?(\d+)\.", version(["ffmpeg", "-version"]) or "")
     if m and int(m.group(1)) < 7:
         line(False, f"FFmpeg 7 or newer (found {m.group(1)})", "the cut tools need it: winget upgrade Gyan.FFmpeg")
-    for mod in ("scipy", "soundfile", "librosa", "av", "PIL", "matplotlib"):
-        if importlib.util.find_spec(mod) is None:
-            line(None, f"optional package {mod} is not installed (only the shot tools need it): python -m pip install -r requirements-shot-tools.txt")
+    hub = os.environ.get("HF_HUB_CACHE") or os.path.join(os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface"), "hub")
+    for folder, label in (("models--Systran--faster-whisper-medium.en", "the speech model"), ("models--depth-anything--Depth-Anything-V2-Small-hf", "the depth model")):
+        found = os.path.isdir(os.path.join(hub, folder))
+        line(found, label, "" if found else "step 2 of .claude/skills/setup/SKILL.md downloads it")
     if "--resolve" in sys.argv:
         import resolve_live as rl
         try:
