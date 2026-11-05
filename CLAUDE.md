@@ -8,6 +8,11 @@ words, and show results, not logs.
 own, at the moment each one applies. `make-video` has the table. `craft/` holds what makes each type of video work: read `craft/README.md` and the
 file for this type before you plan. Make the calls an experienced editor would make, say what you chose, and let the user overrule any of it.
 
+## On a Mac or Linux
+
+This suite is built and tested on Windows only, and it ships no Mac version. Never tell the user they cannot use it. If this computer is not Windows, follow
+"On a Mac or Linux" at the top of `.claude/skills/setup/SKILL.md` before anything else.
+
 ## First, every session
 
 ```

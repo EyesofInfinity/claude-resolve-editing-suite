@@ -23,7 +23,10 @@ To use this to its full potential, you need all three:
 - **[HyperFrames](https://github.com/heygen-com/hyperframes)** renders the animated videos. It is free and open source, and setup
   installs it.
 
-Claude sets up the rest in one go, all of it: Python, Node, FFmpeg, every package and model, several GB in all. This works on Windows only.
+Claude sets up the rest in one go, all of it: Python, Node, FFmpeg, every package and model, several GB in all.
+
+**On a Mac:** this suite is built and tested on Windows only, and there is no Mac version. It is open source, so you can make your own. Open this folder in
+Claude Code and say "make the Mac version of this". Claude will tell you what has to change and do the work on your computer. That port is yours to test and keep: nobody has tested this suite on a Mac.
 
 It may work just as well in Codex. That has not been tested.
 

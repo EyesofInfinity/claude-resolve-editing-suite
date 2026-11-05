@@ -50,7 +50,7 @@ def version(cmd):
 def main():
     sys.stdout.reconfigure(errors="backslashreplace")
     print(f"Python {sys.version.split()[0]} at {sys.executable}")
-    line(os.name == "nt" or None, "Windows" if os.name == "nt" else f"this is {sys.platform}; the suite is built and tested on Windows only")
+    line(os.name == "nt" or None, "Windows" if os.name == "nt" else f"this is {sys.platform}; the suite is built and tested on Windows only, and has no version for this system. The lines below use Windows folders. See \"On a Mac or Linux\" in .claude/skills/setup/SKILL.md")
     line(sys.version_info >= (3, 10), f"Python 3.10 or newer (tested on 3.12)", "" if sys.version_info >= (3, 10) else "install Python 3.12 from python.org")
     line(os.path.isfile(RESOLVE), "DaVinci Resolve", "" if os.path.isfile(RESOLVE) else "install DaVinci Resolve Studio; its scripting and DCTL effects are Studio features")
     installed = os.path.isfile(os.path.join(LUT, "Develop", "Develop 1 Light.dctl"))

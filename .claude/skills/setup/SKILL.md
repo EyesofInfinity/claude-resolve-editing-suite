@@ -14,6 +14,24 @@ a video must never wait on an install.
 Work in order. For each step: check first, skip it if it is done, then verify. Tell the user in one short line what you are doing.
 Run every command from this folder.
 
+## On a Mac or Linux
+
+Check first: your environment lists the platform, or run `uname -s` in a shell. `win32`, or a `uname` that starts with `MINGW` or `MSYS`, is Windows: go on to step 0. Anything else: the steps below do not apply as written, because they use
+winget, PowerShell and Windows folders. Stop and tell the user, in plain words:
+
+> This suite is built and tested on Windows, and it has no Mac version. It is open source, so I can make one here, on your computer. Nobody has tested it on a Mac, so we would test it as we go. Shall I?
+
+On a yes, work on a new git branch or a copy of this folder, and test each part before you call it working. These are the parts tied to Windows:
+
+- **Installers:** `Install.bat`, `Uninstall.bat` and `installer/*.ps1`. Write a shell version.
+- **Folders:** `tools/resolve_live.py`, `tools/doctor.py`, `develop_template.py` and `effects/build.py` name Windows paths for Resolve's LUT and scripting folders. Resolve's own scripting README
+  gives each system's scripting paths: read it on this computer.
+- **Audio plugins:** `plugins/prebuilt` holds Windows builds. Build them from `plugins/character` and `plugins/spaces`, using their `CMakeLists.txt`.
+- **Packages:** replace winget with Homebrew, and replace the NVIDIA PyTorch step with the default build.
+- **Everything else:** run each tool's own check, and fix what fails. Search the tree for other Windows paths and for `-I`, `.exe` and PowerShell.
+
+Say plainly what you tested and what you did not. Then carry on with step 0, adapted.
+
 ## 0. Get one OK
 
 Tell the user, in plain words, and wait for a yes:
