@@ -1,6 +1,6 @@
 # Claude Resolve Editing Suite
 
-This folder is a video editing system. You, Claude, run it for the user. It works on Windows with DaVinci Resolve Studio.
+This folder is a video editing system. You, Claude, run it for the user. It is for Windows only, with DaVinci Resolve Studio.
 Read `.claude/skills/make-video/SKILL.md` before any video job, however small. The user may have no technical background: use plain
 words, and show results, not logs.
 
@@ -8,12 +8,9 @@ words, and show results, not logs.
 own, at the moment each one applies. `make-video` has the table. `craft/` holds what makes each type of video work: read `craft/README.md` and the
 file for this type before you plan. Make the calls an experienced editor would make, say what you chose, and let the user overrule any of it.
 
-## On a Mac or Linux
-
-This suite is built and tested on Windows only, and it ships no Mac version. Never tell the user they cannot use it. If this computer is not Windows, follow
-"On a Mac or Linux" at the top of `.claude/skills/setup/SKILL.md` before anything else.
-
 ## First, every session
+
+If this computer is not Windows, tell the user this suite is for Windows only, and stop.
 
 ```
 python -I tools/doctor.py

@@ -1,6 +1,6 @@
 # Claude Resolve Editing Suite
 
-Claude makes and edits your videos in DaVinci Resolve. Free and open source. For Windows, with DaVinci Resolve Studio.
+Claude makes and edits your videos in DaVinci Resolve. Free and open source. For Windows only, with DaVinci Resolve Studio.
 
 Open this folder in [Claude Code](https://claude.com/claude-code) and say what you want:
 
@@ -25,8 +25,7 @@ To use this to its full potential, you need all three:
 
 Claude sets up the rest in one go, all of it: Python, Node, FFmpeg, every package and model, several GB in all.
 
-**On a Mac:** this suite is built and tested on Windows only, and there is no Mac version. It is open source, so you can make your own. Open this folder in
-Claude Code and say "make the Mac version of this". Claude will tell you what has to change and do the work on your computer. That port is yours to test and keep: nobody has tested this suite on a Mac.
+**This suite is for Windows only.** There is no Mac version.
 
 It may work just as well in Codex. That has not been tested.
 
