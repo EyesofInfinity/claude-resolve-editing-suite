@@ -1,4 +1,4 @@
-# The core: the grade tools and the cut tools. python -m pip install -r requirements.txt
+# The grade tools and the cut tools. Setup installs this file and requirements-shot-tools.txt; the suite needs both.
 numpy
 opencv-python
 faster-whisper

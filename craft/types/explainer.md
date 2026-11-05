@@ -50,7 +50,7 @@ Conversational narration, dry and close. Music changes at section changes. Spars
 
 ## Suite route
 
-`builder/skills/vox-explainer/SKILL.md` or `builder/skills/animated-chart/SKILL.md` for collage and data, `animation/animate/SKILL.md` for illustrated stories, then [motion.md](../motion.md), `.claude/skills/unslop/SKILL.md` on the designed frames, and `animation/sound-pass/SKILL.md`.
+`builder/skills/vox-explainer/SKILL.md` or `builder/skills/animated-chart/SKILL.md` for collage and data, `animation/animate/SKILL.md` for illustrated stories, then [motion.md](../motion.md), `.claude/skills/unslop/SKILL.md` on the designed frames, and `animation/sound-pass/SKILL.md`. `sound_pass.py` replaces the film's audio, so with narration use its licence and beat steps and mix in Resolve.
 
 ## Common failures
 

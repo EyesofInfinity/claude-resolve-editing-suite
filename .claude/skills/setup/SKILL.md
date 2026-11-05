@@ -6,7 +6,7 @@ description: Set up the Claude Resolve Editing Suite on this computer for a new 
 # Set up the suite
 
 You do this for the user. They do only what a person must do: give one OK, install Resolve Studio if it is missing, click Yes on
-one Windows prompt, and set one preference in Resolve.
+the Windows prompts, and set one preference in Resolve.
 
 **Nothing in this suite is optional. Install all of it, in this one run.** Never call a part "optional" or an "extra", and never offer to add it later. A user who asks for
 a video must never wait on an install.
@@ -18,13 +18,13 @@ Run every command from this folder.
 
 Tell the user, in plain words, and wait for a yes:
 
-> I will set up the whole suite on this computer, so nothing is left to install later. I will install what is missing: Python, Node and FFmpeg
+> I will set up the whole suite on this computer, so nothing is left to install later. You need DaVinci Resolve Studio, the paid edition. I will install what is missing: Python, Node, Git and FFmpeg
 > with Windows' own installer (winget), all the Python packages including PyTorch (a few GB), HyperFrames with its browser (about 160 MB plus
 > Chrome), the animation tools (about 700 MB), a speech model (about 1.5 GB) and a depth model (about 99 MB). Then I will put the effects and
-> audio plugins into DaVinci Resolve. Windows will ask you once for admin rights, for the plugins. I will also add HyperFrames' guides to your
-> Claude folder. This can take a while, and you can do other work while it runs. Nothing else on your computer changes. Shall I go ahead?
+> audio plugins into DaVinci Resolve. Windows will ask for admin rights for the plugins, and also for Node and Git if they are missing: click Yes each time. I will also add HyperFrames' guides to your
+> Claude folder, and ask you to set one preference in Resolve. This can take a while, and you can do other work while it runs. Nothing else on your computer changes. Shall I go ahead?
 
-If the user says no to a part, skip that part and say what will not work.
+If the user says no, install nothing. Tell them the suite needs all of it, and that they can say yes at any time.
 
 ## 1. Python, Node, FFmpeg
 
@@ -33,15 +33,17 @@ Check each one:
 ```
 python --version
 node --version
+git --version
 ffmpeg -version
 ```
 
-Python must be 3.10 or newer (a line that says the Microsoft Store, or no version, means it is missing). Node must be 22.15 or
-newer. Install what is missing, one at a time:
+Python must be 3.10 or newer (a line that says the Microsoft Store, or no version, means it is missing). Node must be 24 or
+newer. Git brings the `bash` that the B-roll tool runs. Install what is missing, one at a time:
 
 ```
 winget install -e --id Python.Python.3.12 --source winget --accept-package-agreements --accept-source-agreements
 winget install -e --id OpenJS.NodeJS.LTS --source winget --accept-package-agreements --accept-source-agreements
+winget install -e --id Git.Git --source winget --accept-package-agreements --accept-source-agreements
 winget install -e --id Gyan.FFmpeg --source winget --accept-package-agreements --accept-source-agreements
 ```
 
@@ -72,6 +74,9 @@ Then install everything:
 python -m pip install -r requirements.txt -r requirements-shot-tools.txt
 ```
 
+If pip says "Defaulting to user installation", this Python's folder is read-only, and the suite's `python -I` commands cannot read the user folder. Stop, install Python 3.12
+for this user with python.org's "Install Now", put it first on PATH, and run this step again.
+
 Then download the models now, so no job stops for them later:
 
 ```
@@ -96,7 +101,7 @@ Ask the user to close Resolve. Check that it is closed:
 powershell -NoProfile -Command "if (Get-Process Resolve -ErrorAction SilentlyContinue) { 'still open' } else { 'closed' }"
 ```
 
-Tell the user: "Windows will now ask for admin rights, once, for the audio plugins. Please click Yes." Then run the installer:
+Tell the user: "Windows will now ask for admin rights for the audio plugins. Please click Yes." Then run the installer:
 
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File installer/install.ps1 -Yes

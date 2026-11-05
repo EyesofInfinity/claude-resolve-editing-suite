@@ -35,7 +35,7 @@ Infer what you can from the request and the repo. Ask only when two readings lea
 
 ### 1. Setup
 
-`<skill>` below is the directory this SKILL.md lives in. Scripts run on Node 24+ (it strips the TypeScript types itself) or on [Bun](https://bun.sh), on macOS, Linux and Windows; the first run downloads Playwright's Chromium and a static ffmpeg (about 250 MB).
+`<skill>` below is the directory this SKILL.md lives in. Scripts run on Node 24+ (it strips the TypeScript types itself) or on [Bun](https://bun.sh), on macOS, Linux and Windows; setup installed Playwright's Chromium and a static ffmpeg (about 250 MB).
 
 ```bash
 node <skill>/scripts/setup.mjs     # any OS: installs playwright, ffmpeg, pixelmatch once (bun if present, else npm); prints "ready"

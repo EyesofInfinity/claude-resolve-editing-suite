@@ -16,7 +16,8 @@ These calls are in the scripting API for Resolve 21.1. Only captions have been t
 | Even out a voice | Dialogue Leveler | The clip's `AudioDialogueLevelerEnabled` and related properties |
 | Match levels between clips | Normalize | `timeline.NormalizeAudioLevel(items, options)` |
 | Steady a shaky shot | Stabilizer | `timelineItem.Stabilize()` |
-| Build a timeline from many clips | Media pool | `mediaPool.CreateTimelineFromClips(name, clips)`, or `AppendToTimeline` |
+| Build a timeline from many clips | Media pool | `mediaPool.CreateTimelineFromClips(name, [{"mediaPoolItem": c} for c in clips])`, or `AppendToTimeline` |
+| Add a dissolve or other Resolve transition | Transitions | `timelineItem.AddTransition({"type": "Cross Dissolve", "category": "simple", "position": "end", "alignment": "center", "duration": frames})`. With alignment "left" and no spare frames, the shot fades to black: use "center", with half the duration spare on both sides |
 
 Every call here changes the open project. Follow the rules in `CLAUDE.md`: read Resolve first, work on a new timeline, and leave the user's work alone.
 

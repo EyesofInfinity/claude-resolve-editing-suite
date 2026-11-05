@@ -19,7 +19,7 @@ Add `--clips 1,3,7` for some clips only. Every run writes a folder under `runs/`
 | `Clean Finish` | Deband and fine grain only. Safe over a finished film, and close to safe on flat brand colour |
 | `Warm Film with Leak` | An example of a look that carries an effect |
 
-These looks were tuned on Rec.709 footage. For log footage, add a Color Space Transform before the grade. Treat each look as a
+These looks were tuned on Rec.709 footage. For log footage, see `craft/color.md`: a grade replaces the clip's nodes, so a transform added to the clip first is lost. Treat each look as a
 starting point: copy the file, change the values, give it a new name.
 
 ## The file

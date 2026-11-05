@@ -2,8 +2,9 @@
 
 usage: python -I tools/doctor.py [--resolve]
 --resolve also connects to a running Resolve and reads its name, version and open project. It reads only.
-Exit 0 when the core is ready (Resolve found, suite installed, Python packages, Node, FFmpeg).
+Exit 0 when every part of the suite is in place: the suite needs all of it.
 """
+import glob
 import importlib.util
 import json
 import os
@@ -33,7 +34,8 @@ def user_site_has(mod):
     """The package sits in this user's own site folder, which python -I leaves out."""
     try:
         import site
-        return os.path.isdir(os.path.join(site.getusersitepackages(), mod))
+        base = os.path.join(site.getusersitepackages(), mod)
+        return os.path.isdir(base) or os.path.isfile(base + ".py")
     except Exception:  # noqa: BLE001
         return False
 
@@ -60,22 +62,41 @@ def main():
         found = importlib.util.find_spec(mod) is not None
         fix = "python -m pip install -r requirements.txt -r requirements-shot-tools.txt"
         if not found and user_site_has(mod):
-            fix = "it is installed for this user only, which python -I does not read: run the tools without -I"
+            fix = "it is installed for this user only, which python -I does not read: see step 2 of .claude/skills/setup/SKILL.md"
         line(found, f"Python package {pkg}", "" if found else fix)
     node = version(["node", "--version"])
     m = re.match(r"v(\d+)\.(\d+)", node or "")
     have = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
-    good = have >= (23, 8) or (22, 15) <= have < (23, 0)
-    line(good, f"Node 22.15 or newer ({node or 'not found'})", "" if good else "install the current Node from nodejs.org")
+    good = have >= (24, 0)
+    line(good, f"Node 24 or newer ({node or 'not found'})", "" if good else "install the current Node LTS from nodejs.org")
+    line(shutil.which("git") is not None, "Git, which brings bash", "" if shutil.which("git") else "winget install -e --id Git.Git")
     for tool in ("ffmpeg", "ffprobe"):
         line(shutil.which(tool) is not None, tool, "" if shutil.which(tool) else "install FFmpeg and put it on PATH (winget install Gyan.FFmpeg)")
     m = re.match(r"ffmpeg version n?(\d+)\.", version(["ffmpeg", "-version"]) or "")
     if m and int(m.group(1)) < 7:
         line(False, f"FFmpeg 7 or newer (found {m.group(1)})", "the cut tools need it: winget upgrade Gyan.FFmpeg")
     hub = os.environ.get("HF_HUB_CACHE") or os.path.join(os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface"), "hub")
-    for folder, label in (("models--Systran--faster-whisper-medium.en", "the speech model"), ("models--depth-anything--Depth-Anything-V2-Small-hf", "the depth model")):
-        found = os.path.isdir(os.path.join(hub, folder))
+    # the weights file, since an interrupted download leaves the folder behind
+    for folder, weights, label in (("models--Systran--faster-whisper-medium.en", "model.bin", "the speech model"), ("models--depth-anything--Depth-Anything-V2-Small-hf", "model.safetensors", "the depth model")):
+        found = bool(glob.glob(os.path.join(glob.escape(os.path.join(hub, folder)), "snapshots", "*", weights)))
         line(found, label, "" if found else "step 2 of .claude/skills/setup/SKILL.md downloads it")
+    root = os.path.dirname(HERE)
+    for folder, label in (("animation/animate", "the animation tools"), ("animation/reanimate/scripts", "the motion copier")):
+        found = os.path.isdir(os.path.join(root, folder, "node_modules", "playwright"))
+        line(found, label, "" if found else "step 7 of .claude/skills/setup/SKILL.md installs it")
+    browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or os.path.join(os.environ.get("LOCALAPPDATA", ""), "ms-playwright")
+    found = bool(glob.glob(os.path.join(glob.escape(browsers), "chromium-*")))
+    line(found, "the animation browser", "" if found else "step 7 of .claude/skills/setup/SKILL.md installs it")
+    npm = shutil.which("npm")
+    cache = (version([npm, "config", "get", "cache"]) if npm else None) or os.path.join(os.environ.get("LOCALAPPDATA", ""), "npm-cache")
+    found = False
+    for package in glob.glob(os.path.join(glob.escape(cache), "_npx", "*", "node_modules", "hyperframes", "package.json")):
+        try:
+            with open(package, encoding="utf-8") as f:
+                found = found or json.load(f).get("version") == "0.8.206"
+        except (OSError, ValueError):
+            pass
+    line(found, "HyperFrames 0.8.206", "" if found else "step 6 of .claude/skills/setup/SKILL.md installs it")
     if "--resolve" in sys.argv:
         import resolve_live as rl
         try:

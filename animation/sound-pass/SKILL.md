@@ -84,7 +84,7 @@ Run `librosa.beat.beat_track`. **librosa sometimes locks onto the off-beat.** Lo
 Hard cuts and reveals should land on a beat. If you can change the animation timings, change them. If you can't, move where the music starts (search offsets and pick the one with the smallest cut-to-beat error). Report the error per cut in ms.
 
 ## 5. Place SFX and mix
-Priority: **voiceover > SFX > music.** Sound effects are accents: keep them at about the music's level (raise `--music-db` toward 0). The music ducks under any voiceover by 8 to 12 dB.
+Priority: **voiceover > SFX > music.** Sound effects are accents: keep them at about the music's level (raise `--music-db` toward 0). `sound_pass.py` takes no voice and drops the picture's audio. With a voiceover, mix in Resolve and duck the music 8 to 12 dB there.
 Target **about -16 LUFS integrated** with **true peak below -4 dBFS**, so nothing clips after AAC compression or on a phone speaker. Export, measure, adjust gain or add a limiter, then export and measure again:
 ```
 ffmpeg -nostats -i after.mp4 -af ebur128=peak=true -f null - 2>&1 | tail -16

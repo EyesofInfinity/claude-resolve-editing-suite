@@ -17,7 +17,7 @@ Keep one thought on screen at a time. If the viewer must read and listen to diff
 | Minimum on screen | 5/6 of a second for a subtitle line. Word-by-word captions are exempt. [standard, Netflix] |
 | Maximum on screen | 7 seconds for one caption. [standard, Netflix] |
 | Reading speed | 17 to 20 characters a second, counting spaces. Use 17 for dense content or wider audiences. [standard, Netflix guides vary by language and audience] |
-| Line length | Up to 42 characters a line, two lines at most, for Latin alphabets on 16:9. [standard] On 9:16 about 20 at caption size. [default] |
+| Line length | Up to 42 characters a line, two lines at most, for Latin alphabets on 16:9. [standard] On 9:16 about 16 at Resolve's default caption size, where 20 reaches the frame edges. [measured, one test] |
 | A title or key line | Long enough to read aloud twice |
 | Sync | The word appears with its spoken word or a few frames before. Late text feels wrong. [default] |
 | Across a cut | End 2 frames before a cut, or stay well past it. A caption that hangs across a cut for a few frames reads as an error. [practice] |

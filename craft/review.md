@@ -28,7 +28,7 @@ ffmpeg -i final.mp4 -vf "fps=1,scale=270:-1,tile=8x8" -frames:v 1 contact.png
 That sheet holds 64 frames, so set the rate from the length or it stops early: for a clip of D seconds use `fps=64/D`. Even intervals miss the things that break between frames, so also make a strip around each cut and fast move:
 
 ```
-ffmpeg -ss 12.3 -i final.mp4 -frames:v 6 -vf "scale=480:-1,tile=6x1" cut_at_12.3.png
+ffmpeg -ss 12.3 -i final.mp4 -frames:v 1 -vf "scale=480:-1,tile=6x1" cut_at_12.3.png
 ```
 
 Scale frames to phone size (360 wide) for anything that will play on a phone.

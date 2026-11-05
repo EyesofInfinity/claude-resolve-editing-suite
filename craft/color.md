@@ -4,7 +4,7 @@ Grade after the picture is locked. A grade done early is redone. [practice]
 
 ## The order
 
-1. **Get to Rec.709.** Log footage needs a Color Space Transform first. The looks here expect Rec.709.
+1. **Get to Rec.709.** Log footage needs a transform first. Use Resolve's colour management, because a grade from this suite replaces the clip's nodes. The looks here expect Rec.709.
 2. **Balance each shot.** Set exposure and white balance so every shot is correct on its own. Do not reach for a look yet.
 3. **Match neighbours.** Make shots in a scene read as one place and time.
 4. **Apply one look** over the balanced shots. The look holds colour and mood. Exposure belongs to each shot, so keep it out of the look.

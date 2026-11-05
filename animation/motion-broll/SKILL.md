@@ -31,7 +31,7 @@ This checks for Node, Python 3 and ffmpeg, and installs Playwright + Chromium in
 Use the AskUserQuestion tool; keep it to one round. You need:
 
 - **The video.** A path. Copy or reference it as `motion/work/source.*`.
-- **The transcript.** An SRT or VTT with timestamps is best. With plain text only, get word timestamps from the audio (`pip install faster-whisper`) or ask for an SRT.
+- **The transcript.** An SRT or VTT with timestamps is best. With plain text only, get word timestamps from the audio with `faster-whisper`, which setup installed, or ask for an SRT.
 - **Density:**
   - Light: 2–4 clips per minute, only the strongest moments.
   - Medium (default): 4–7 per minute.

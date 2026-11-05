@@ -48,11 +48,11 @@ steps ran. Reusing an earlier result is fine: say that you reused it.
 - **Who builds:** you are Claude Code. Where a skill says to paste a prompt into Claude Code, do the build yourself.
 - **Length and shape:** the user's request and the type file set these. A skill's table is a starting point to re-time.
 - **Sound:** recorded sounds are the default, and code-made sounds are allowed where `craft/sound.md` says so.
-- **`unslop` in a film:** run its audit, direction and passes on the film's frames. Its layout and motion passes are written for apps and pages, so in a film `craft/motion.md` decides how things move. Put its audit and direction in your plan, with no separate stop unless the user wants one. Ask before an image tool that may cost money. Its story video and `snapshot.mjs` need Playwright, so make the video only when the user asks.
+- **`unslop` in a film:** run its audit, direction and passes on the film's frames. Its layout and motion passes are written for apps and pages, so in a film `craft/motion.md` decides how things move. Put its audit and direction in your plan, with no separate stop unless the user wants one. Ask before an image tool that may cost money. Its story video and `snapshot.mjs` need Playwright: run them from the folder `animation/animate`, where setup installed it, and make the video only when the user asks.
 
 **Skip one only with a reason you can write down**, in the brief, in one line. The user can always tell you to skip something.
 
-Asking still comes first for a download, an install, or anything that changes the user's project: that protects their work, and `CLAUDE.md` has those
+Setup installed the suite under one OK. Asking still comes first for a tool from outside the suite, or anything that changes the user's project: that protects their work, and `CLAUDE.md` has those
 rules. Plain craft and tool choices need no permission.
 
 ## 1. Find the job
@@ -131,8 +131,8 @@ Use this for weddings, events, documentaries, vlogs, music videos and anything a
 
 1. **Inventory.** List the folder. Run `ffprobe` on each clip for length, frame rate, size, audio and colour transfer. Note variable-rate phone clips and log footage. Write it to the job folder.
 2. **Read it.** Make a contact sheet per clip, at a rate set from its length (`craft/review.md`), and write one line on each.
-3. **Find the words.** Run `edit/transcribe.py` on clips with speech, one clip at a time. It stops on a clip with no audio track. Use `--model medium` for speech that is not English.
-4. **Find the music.** `effects/beat/beat.py` writes the song's beats and downbeats to a `.music.json`. You place the cuts: nothing here does it for you.
+3. **Find the words.** Run `edit/transcribe.py` on clips with speech, one clip at a time. It stops on a clip with no audio track. Use `--model medium` for speech that is not English. It is a separate large download, so tell the user first.
+4. **Find the music.** `effects/beat/beat.py <song> --out <job folder> --reactions none` writes the song's beats and downbeats to a `.music.json`. You place the cuts: nothing here does it for you.
 5. **Plan.** Write a shot plan in the job folder: clip, in, out, why. Show the user before any long job.
 6. **Build.** `edit/to_resolve.py` lays out one source only. For many clips, use Resolve's `CreateTimelineFromClips` or `AppendToTimeline` on a new timeline. Test it on a few clips first.
 7. **Sync.** Use Resolve's `AutoSyncAudio` for a separate recorder and `CreateMulticamClip` for several cameras.
@@ -142,8 +142,8 @@ Use this for weddings, events, documentaries, vlogs, music videos and anything a
 
 Resolve Studio makes captions itself. Use it first. Rules for groups, size and timing are in `craft/text.md`.
 
-1. Read the open project and timeline, as `CLAUDE.md` rule 1 says. Put the clip on a new timeline, and set its size to 1080 by 1920 for 9:16.
-2. Create the captions with `timeline.CreateSubtitlesFromAudio`. Pass `resolve.SUBTITLE_LANGUAGE`, `SUBTITLE_CAPTION_PRESET`, `SUBTITLE_CHARS_PER_LINE`, `SUBTITLE_LINE_BREAK` and `SUBTITLE_GAP`. For 9:16, use 16 characters a line on one line: at the default size, 20 characters reach the edges of the frame. It returns at once, so poll `project.GetCreateSubtitlesFromAudioStatus()` until `JobStatus` reads `Complete`. On 40 seconds of speech it took under a minute.
+1. Read the open project and timeline, as `CLAUDE.md` rule 1 says. Make a new timeline, set its size to 1080 by 1920 for 9:16, then put the clip on it.
+2. Create the captions with `timeline.CreateSubtitlesFromAudio`. Pass `resolve.SUBTITLE_LANGUAGE`, `SUBTITLE_CAPTION_PRESET`, `SUBTITLE_CHARS_PER_LINE`, `SUBTITLE_LINE_BREAK` and `SUBTITLE_GAP`. For 9:16, use 16 characters a line on one line: at the default size, 20 characters reach the edges of the frame. It returns at once, so poll `project.GetCreateSubtitlesFromAudioStatus()` until `JobStatus` reads `Complete`, and stop and report if it reads `Failed` or `Cancelled`. On 40 seconds of speech it took under a minute.
 3. Read the text back with `timeline.GetItemListInTrack("subtitle", 1)`; each item's name is its text. Check names and terms. Have the user spell names, and correct them in Resolve's subtitle inspector, which has search and replace.
 4. **The user does two things by hand, because scripts cannot.** Tell them exactly what and why:
    - **Position:** on 9:16 Resolve's default sits at about y 1540, under the platform's buttons. Raise it above y 1400 in the subtitle track's style in the Inspector.

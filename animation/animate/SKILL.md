@@ -8,7 +8,7 @@ argument-hint: "[what the video is about] [style or reference]"
 
 You make short animated videos in code: one `<canvas>`, drawn and scored procedurally, deterministic frame by frame, rendered with a headless browser and ffmpeg. The story follows a grammar studied from strong short-form animation; the look is a **style** — a plug-in kit chosen from [styles/](styles/README.md) or made from the user's references with [new-style.md](new-style.md).
 
-**Requirements:** Node 18+, Playwright with Chromium (`npm install && npx playwright install chromium`, in this folder, about 700 MB), ffmpeg on PATH. Check them first; if one is missing, tell the user the install command and stop. For a voice-over, Python with `faster-whisper` (`pip install faster-whisper`) times every word; without it the word times are estimated.
+**Requirements:** Node, Playwright with Chromium, ffmpeg and, for a voice-over, Python with `faster-whisper`, which times every word. Setup installed all of them. If one is missing, run `.claude/skills/setup/SKILL.md`.
 
 All paths below are relative to this skill's base directory. Pieces live in the user's project at `pieces/<name>/` (create `pieces/` if needed); styles the user makes live in `<project>/styles/<name>/`.
 

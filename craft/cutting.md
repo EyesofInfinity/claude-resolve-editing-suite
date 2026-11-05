@@ -75,7 +75,7 @@ mid-word makes a weak last frame.
 - Fades to black mark a real ending or a large change of section.
 - An effect transition (`Push`, `Warp`, `Glitch`, `Film Dissolve`, see `EFFECTS.md`) is for energy or genre. Pick one family for a film and use it at section changes.
 - A transition plays over a held moment or a change of idea. A transition under a key word steals from the word.
-- Transitions cannot be placed by script. Tell the user which file to drag onto which cut.
+- Resolve's own transitions go on by script: see [resolve-tools.md](resolve-tools.md). The suite's DCTL transitions cannot, because a script cannot pick the file. Tell the user which file to drag onto which cut.
 
 ## Moves worth knowing
 
@@ -95,4 +95,4 @@ mid-word makes a weak last frame.
 ## Safety
 
 Keep flashes to three or fewer in any one second. Large bright flashes above that can trigger seizures. [standard, WCAG 2.3.1] Strobing and red
-flashes are the risk. `motion_qa.py` reports one-frame flashes.
+flashes are the risk. `motion_qa.py` reports one-frame flashes and does not count them per second, so a strobe can pass it. Step through any strobe by eye and count.

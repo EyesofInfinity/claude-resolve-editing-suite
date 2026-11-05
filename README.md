@@ -64,13 +64,13 @@ To remove the effects and plugins, double-click `Uninstall.bat`. It removes only
 - A cut goes on a new timeline. A grade goes on a new colour version. Your other grades stay.
 - The tools never write over a source file or an existing render unless you say so.
 - A grade run keeps a way back on disk, even if the run stops part way.
-- Claude asks before it installs or downloads anything.
+- Claude asks once before it installs the suite, and lists what it will install. It asks again for anything from outside the suite.
 
 ## Good to know
 
 - Tested on DaVinci Resolve Studio 21.1.
 - Effects and audio plugins appear in Resolve under the name **Develop**.
-- The grade and looks expect Rec.709 footage. Log footage needs a Color Space Transform first.
+- The grade and looks expect Rec.709 footage. Log footage needs Resolve's colour management set up first, and Claude will ask you about it.
 - Claude and you make the choices. Look and listen before you publish.
 
 ## Licence

@@ -86,7 +86,7 @@ Limits:
 
 ### The depth weights
 
-`camera.py` loads Depth Anything V2 Small from the local Hugging Face cache only (`depth-anything/Depth-Anything-V2-Small-hf`, offline, it never downloads). The weights are not in this repo. Fetch them once before the first run, for example `hf download depth-anything/Depth-Anything-V2-Small-hf` (about 99 MB). Read the model card's licence before you use them: the Small model is published as Apache-2.0, and the Base, Large and Giant V2 models are CC-BY-NC-4.0 (non-commercial), so only Small is used here.
+`camera.py` loads Depth Anything V2 Small from the local Hugging Face cache only (`depth-anything/Depth-Anything-V2-Small-hf`, offline, it never downloads). The weights are not in this repo. Setup downloads them (about 99 MB). To fetch them again, run `hf download depth-anything/Depth-Anything-V2-Small-hf`. Read the model card's licence before you use them: the Small model is published as Apache-2.0, and the Base, Large and Giant V2 models are CC-BY-NC-4.0 (non-commercial), so only Small is used here.
 
 ## The depth input (not proven live)
 

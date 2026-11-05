@@ -17,7 +17,7 @@ python -I tools/doctor.py
 It lists what is missing and changes nothing. **If anything is missing, or the user is new to this suite, or Python is not installed yet, follow
 `.claude/skills/setup/SKILL.md` step by step.** Every part of this suite is required, and nothing in it is optional. Install all of it, even if this job would not use it. It sets up the whole system for them. The commands here use `python -I`, which keeps
 other files from loading as code. `-I` does not see packages installed with `pip --user`: if one reads as missing after you installed
-it, run the tool without `-I`.
+it, follow the note in step 2 of the setup skill.
 
 ## What the user can ask for
 
@@ -28,7 +28,7 @@ it, run the tool without `-I`.
 | A talking-head or voice take cut clean (silences, false starts, retakes) | the cut tools, then a real Resolve timeline | `edit/README.md` |
 | Motion graphics timed to a speaker's words | motion-broll | `animation/motion-broll/SKILL.md` |
 | A timeline graded shot by shot, with a look and effects | `develop_apply.py` | `looks/README.md` |
-| Sound effects and a mix on a finished picture | sfx, sound-pass | `animation/sfx/README.md`, `animation/sound-pass/SKILL.md` |
+| Sound effects and a mix on a finished picture with no speech or sound to keep (`sound_pass.py` replaces the audio; otherwise mix in Resolve) | sfx, sound-pass | `animation/sfx/README.md`, `animation/sound-pass/SKILL.md` |
 | An effect, transition or audio plugin explained | the effect list | `EFFECTS.md` |
 | A check of a finished render | motion-qa | `python -I animation/motion-qa/motion_qa.py <video>` |
 | Advice on making a video better: pacing, structure, framing, grade, sound | the craft rules | `craft/README.md` |
@@ -83,7 +83,7 @@ Render at 60 fps with motion blur. The page must be a composition: `builder/READ
 
 - External scripting must be on: Preferences > System > General > External scripting using: Local.
 - Effects run as DCTL plugin nodes, so moving effects keep moving. A LUT node freezes them.
-- Transitions cannot be placed by script. Tell the user which file to drag onto which cut.
+- Resolve's own transitions go on by script: see `craft/resolve-tools.md`. The suite's DCTL transitions cannot, because a script cannot pick the file. Tell the user which file to drag onto which cut.
 - These scripts change the open project: `develop_apply.py`, `edit/to_resolve.py`, `effects/depth/depth_pass.py`. The first
   two add a colour version or a new timeline. The third rebuilds its own scratch timeline, "Develop depth pass".
-- The effects and looks expect Rec.709 footage. For log footage, add a Color Space Transform before the grade.
+- The effects and looks expect Rec.709 footage. For log footage, stop and ask: `craft/color.md` has why. A grade replaces the clip's nodes, so a transform added to the clip first is lost.
